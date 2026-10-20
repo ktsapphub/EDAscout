@@ -199,7 +199,8 @@ function buildBrief(d, ms) {
 
   const sigs = d.signals, fresh = sigs.filter(s => isFresh(s.found_at)).length;
   const ranked = [...sigs].sort((a, b) => b.score - a.score);
-  const top85 = ranked.filter(s => s.score >= 85).slice(0, 6);
+  const TOP_BAR = 75;
+  const top85 = ranked.filter(s => s.score >= TOP_BAR).slice(0, 6);
   const closest = top85.length ? [] : ranked.slice(0, 3);
 
   const totals = d.money.totals || [], total = totals.reduce((a, t) => a + t.total, 0), mentions = totals.reduce((a, t) => a + t.n, 0);
@@ -244,7 +245,7 @@ function sigStory(s, i) {
 function briefPanel(d, B) {
   const top = B.top85.length
     ? `<div class="stories">${B.top85.map(sigStory).join('')}</div>`
-    : `<p class="note">No story scored 85 or higher for ${B.g} in this update.${B.closest.length ? ' Closest to the bar:' : ''}</p>${B.closest.length ? `<div class="stories dim">${B.closest.map(sigStory).join('')}</div>` : ''}`;
+    : `<p class="note">No story scored 75 or higher for ${B.g} in this update.${B.closest.length ? ' Closest to the bar:' : ''}</p>${B.closest.length ? `<div class="stories dim">${B.closest.map(sigStory).join('')}</div>` : ''}`;
   const lead = geo === 'norfolk'
     ? `<div class="lead-chip"><div class="big" data-count="${B.edaDays ?? 0}">0</div><div><b>day${B.edaDays === 1 ? '' : 's'} until the next EDA meeting</b><span>${B.nextEda ? fmtDate(B.nextEda) : ''} · 12:00 PM · 999 Waterside Dr.</span><button class="jump" data-jump="eda">See EDA meetings ↓</button></div></div>`
     : `<div class="lead-chip"><div class="big">${B.up.length}<small>/${B.dir.length}</small></div><div><b>indicators improved over the year</b><span>${B.g} · Federal Reserve (FRED) data</span><button class="jump" data-jump="trends">See trends ↓</button></div></div>`;
@@ -255,7 +256,7 @@ function briefPanel(d, B) {
     </div>
     <div class="panel-body">
       <div class="brief-top">${lead}<div class="synopsis" data-say="syn"><h4>Synopsis</h4><p>${esc(B.synopsis)}</p></div></div>
-      <h4 class="bh"><span>Top signals · score 85+</span></h4>${top}
+      <h4 class="bh"><span>Top signals · score 75+</span></h4>${top}
       <h4 class="bh"><span>Area by area</span></h4>
       <ol class="areas">${B.areas.map((a, i) => `<li data-say="area${i}" style="--i:${i}"><span class="ai">${ico(a.icon)}</span><div><b>${esc(a.label)}</b><p>${esc(a.line)}</p></div><button class="jump" data-jump="${a.id}" aria-label="Go to ${esc(a.label)}">View ↓</button></li>`).join('')}</ol>
       ${B.keyMetrics.length ? `<h4 class="bh"><span>The numbers</span></h4><div class="nums">${B.keyMetrics.map(m => `<div class="num-chip"><span>${esc(m.label)}</span><b>${fmtVal(m.latest.v, m.unit)}</b><i class="chg ${['flat', 'good', 'bad'][[0, 1, -1].indexOf(direction(m))]}">${esc(chgWords(m) || fmtDate(m.latest.d))}</i></div>`).join('')}</div>` : ''}
@@ -268,7 +269,7 @@ function briefSpeech(B) {
   if (geo === 'norfolk' && B.edaDays != null) parts.push({ say: null, text: `The next E.D.A. meeting is ${fmtDate(B.nextEda)}, ${B.edaDays} days from now.` });
   parts.push({ say: 'syn', text: B.synopsis });
   if (B.top85.length) B.top85.forEach((s, i) => parts.push({ say: `sig${i}`, text: `Top signal, score ${s.score}. ${s.title}. ${storySummary(s, '')}` }));
-  else parts.push({ say: null, text: 'No story scored 85 or higher in this update.' });
+  else parts.push({ say: null, text: 'No story scored 75 or higher in this update.' });
   B.areas.forEach((a, i) => parts.push({ say: `area${i}`, text: `${a.label}. ${a.line}` }));
   return parts;
 }
@@ -398,17 +399,17 @@ const drawTrendCards = () => {};
 // ---------------- charts: palette checked with the dataviz validator (CVD + contrast pass) ----------------
 const CAT = ['#2F6DB0', '#C97A1E', '#9361C2', '#6E9A2A'];
 
-/** Score distribution (histogram) with the 85 bar marked. */
+/** Score distribution (histogram) with the 75 bar marked. */
 function scoreHistogram(list) {
   if (!list.length) return '';
   const bins = Array.from({ length: 10 }, (_, i) => ({ lo: i * 10, n: 0 }));
   list.forEach(s => bins[Math.min(9, Math.floor(s.score / 10))].n++);
   const max = Math.max(1, ...bins.map(b => b.n)), W = innerWidth < 640 ? 340 : 600, H = 92, P = { l: 8, r: 8, t: 10, b: 20 }, bw = (W - P.l - P.r) / 10;
   const X = v => P.l + v / 100 * (W - P.l - P.r), Y = n => P.t + (1 - n / max) * (H - P.t - P.b);
-  return `<div class="histo"><div class="histo-k"><b>Score distribution</b><span>${list.filter(s => s.score >= 85).length} at 85+ · ${list.length} total</span></div>
+  return `<div class="histo"><div class="histo-k"><b>Score distribution</b><span>${list.filter(s => s.score >= 75).length} at 75+ · ${list.length} total</span></div>
     <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Signal scores: ${bins.filter(b => b.n).map(b => `${b.n} between ${b.lo} and ${b.lo + 9}`).join(', ')}">
-    ${bins.map((b, i) => b.n ? `<rect class="hb ${b.lo >= 80 ? 'hi' : ''}" x="${P.l + i * bw + 1}" y="${Y(b.n)}" width="${bw - 2}" height="${H - P.b - Y(b.n)}" rx="4" style="--i:${i}"><title>${b.lo}–${b.lo + 9}: ${b.n} signal${b.n > 1 ? 's' : ''}</title></rect><text x="${P.l + i * bw + bw / 2}" y="${Y(b.n) - 3}" text-anchor="middle" class="hv">${b.n}</text>` : '').join('')}
-    <line class="thr" x1="${X(85)}" x2="${X(85)}" y1="${P.t - 6}" y2="${H - P.b}"/><text class="thr-t" x="${X(85) + 4}" y="${P.t + 2}">85</text>
+    ${bins.map((b, i) => b.n ? `<rect class="hb ${b.lo >= 70 ? 'hi' : ''}" x="${P.l + i * bw + 1}" y="${Y(b.n)}" width="${bw - 2}" height="${H - P.b - Y(b.n)}" rx="4" style="--i:${i}"><title>${b.lo}–${b.lo + 9}: ${b.n} signal${b.n > 1 ? 's' : ''}</title></rect><text x="${P.l + i * bw + bw / 2}" y="${Y(b.n) - 3}" text-anchor="middle" class="hv">${b.n}</text>` : '').join('')}
+    <line class="thr" x1="${X(75)}" x2="${X(75)}" y1="${P.t - 6}" y2="${H - P.b}"/><text class="thr-t" x="${X(75) + 4}" y="${P.t + 2}">75</text>
     ${[0, 20, 40, 60, 80, 100].map(v => `<text class="ax" x="${X(v)}" y="${H - 5}" text-anchor="middle">${v}</text>`).join('')}</svg></div>`;
 }
 
