@@ -211,12 +211,19 @@ function countdown(d) {
   return days <= 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
 }
 
+const val = v => v != null && v !== '' && String(v).toLowerCase() !== 'null';
+function storySummary(it, fallback) {
+  const s = (it?.summary || '').trim();
+  if (s.length < 40) return fallback;
+  const cut = s.length > 230 ? s.slice(0, 230).replace(/\s+\S*$/, '') + '…' : s;
+  return cut;
+}
 function storyCard(b, i, d) {
   const it = d.cites[b.items[0]];
   return `<article class="story" style="animation-delay:${i * 70}ms" data-i="${i}">
     <span class="num">${i + 1}</span>
     ${it ? `<h3>${esc(it.title.slice(0, 140))}</h3>` : ''}
-    <p>${esc(b.text)}</p>
+    <p>${esc(storySummary(it, b.text))}</p>
     <div class="row"><span class="src">${b.items.map(id => d.cites[id]?.source).filter(Boolean).slice(0, 2).map(esc).join(' · ')}</span>
       ${it ? `<button class="read" data-story="${it.id}">Read story ↗</button>` : ''}</div>
   </article>`;
@@ -265,7 +272,7 @@ function edaPanel(d) {
     return `<div class="meet">
       <div class="k"><span class="kind">${esc(m.body)} ${esc(m.doc_kind)}</span><span>${m.meeting_date ? fmtDate(m.meeting_date) : ''}</span>${m.id ? `<button class="linkbtn" data-story="${m.id}" style="margin-left:auto;font-size:12px">Details</button>` : ''}<a href="${esc(m.doc_url)}" target="_blank" rel="noopener" style="font-size:12px">PDF ↗</a></div>
       ${m.summary ? `<h3>${esc(m.summary)}</h3>` : ''}
-      ${acts.length ? `<ul>${acts.map(x => `<li>${esc(x.item)}${x.outcome ? ` · <i>${esc(x.outcome)}</i>` : ''}${x.amount_usd ? ` <span class="amtchip">${esc(x.amount_usd)}</span>` : ''}${x.vote ? ` <span class="amtchip">${esc(x.vote)}</span>` : ''}</li>`).join('')}</ul>`
+      ${acts.length ? `<ul>${acts.map(x => `<li>${esc(x.item)}${val(x.outcome) ? ` · <i>${esc(x.outcome)}</i>` : ''}${val(x.amount_usd) ? ` <span class="amtchip">${esc(x.amount_usd)}</span>` : ''}${val(x.vote) ? ` <span class="amtchip">${esc(x.vote)}</span>` : ''}</li>`).join('')}</ul>`
         : (a.amounts?.length ? `<ul><li>Amounts in document: ${a.amounts.slice(0, 4).map(x => `<span class="amtchip">${esc(x)}</span>`).join(' ')}</li></ul>` : '')}
     </div>`;
   }).join('');
@@ -469,7 +476,7 @@ async function openStory(id) {
     <div class="body">
       ${s.summary ? `<p class="lede">${esc(s.summary)}</p>` : ''}
       ${s.why ? `<div class="whybox"><b>Why it matters:</b> ${esc(s.why)}</div>` : ''}
-      ${acts.length ? `<div><h4>Actions in this document</h4><ul>${acts.map(x => `<li>${esc(x.item)}${x.outcome ? ` · <i>${esc(x.outcome)}</i>` : ''}${x.amount_usd ? ` <span class="amtchip">${esc(x.amount_usd)}</span>` : ''}${x.vote ? ` <span class="amtchip">vote ${esc(x.vote)}</span>` : ''}${x.parties ? ` · ${esc(x.parties)}` : ''}</li>`).join('')}</ul></div>` : ''}
+      ${acts.length ? `<div><h4>Actions in this document</h4><ul>${acts.map(x => `<li>${esc(x.item)}${val(x.outcome) ? ` · <i>${esc(x.outcome)}</i>` : ''}${val(x.amount_usd) ? ` <span class="amtchip">${esc(x.amount_usd)}</span>` : ''}${val(x.vote) ? ` <span class="amtchip">vote ${esc(x.vote)}</span>` : ''}${val(x.parties) ? ` · ${esc(x.parties)}` : ''}</li>`).join('')}</ul></div>` : ''}
       ${s.money?.length ? `<div><h4>Money mentioned</h4>${s.money.map(m => `<div class="money-row" style="padding:8px 0"><div><div class="amt">${money(m.amount)}</div><span class="tag k">${esc(m.kind)}</span></div><div><p>${esc(m.label)}</p></div></div>`).join('')}</div>` : ''}
       ${s.excerpt ? `<div><h4>${s.excerptKind === 'news' ? 'Opening of the article' : 'From the source document'}</h4><div class="excerpt">${esc(s.excerpt)}</div></div>` : ''}
       ${s.related?.length ? `<div><h4>Related</h4><ul class="rows" style="border:1px solid var(--line);border-radius:8px">${s.related.map(r => `<li><button class="linkbtn" data-related="${r.id}">${esc(r.title)}</button><span class="s">${esc(r.source)} · ${ago(r.found_at)}</span></li>`).join('')}</ul></div>` : ''}

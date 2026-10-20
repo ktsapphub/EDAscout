@@ -225,7 +225,7 @@ async function dashboard(env, geo) {
   const [brief, signals, meetings, cityhall, latest, lastRun, counts, health, weekly, money, moneyTotals, awards, momentum, library, outlookRow] = await Promise.all([
     db.prepare("SELECT * FROM briefs WHERE kind = 'daily' ORDER BY period DESC LIMIT 1").first(),
     db.prepare(`SELECT ${ITEM}, g.status, g.rule_hit FROM signals g JOIN items i ON i.id = g.item_id JOIN sources s ON s.id = i.source_id
-       WHERE g.status != 'dismissed' AND i.type NOT IN ('meeting','context') AND s.geo IN ${G}
+       WHERE g.status != 'dismissed' AND i.type NOT IN ('meeting','context') AND s.geo IN ${G} AND (i.published_at IS NULL OR i.published_at >= date('now','-180 days') OR g.status = 'pinned')
        ORDER BY (g.status = 'pinned') DESC, i.found_at >= datetime('now','-2 days') DESC, i.score DESC LIMIT 30`).all(),
     db.prepare(`SELECT m.body, m.doc_kind, m.meeting_date, m.doc_url, m.actions, m.created_at, i.id, i.summary, i.why, i.title FROM meetings m LEFT JOIN items i ON i.id = m.item_id
        ORDER BY m.meeting_date DESC, m.id DESC LIMIT 8`).all(),
@@ -240,9 +240,9 @@ async function dashboard(env, geo) {
         SUM(CASE WHEN last_fetched IS NULL THEN 1 ELSE 0 END) pending FROM sources WHERE active = 1 AND deleted_at IS NULL`).first(),
     db.prepare("SELECT * FROM briefs WHERE kind = 'weekly' ORDER BY period DESC LIMIT 1").first(),
     db.prepare(`SELECT mo.amount, mo.label, mo.kind, mo.found_at, i.id, i.title, i.url, s.name AS source FROM money mo JOIN items i ON i.id = mo.item_id JOIN sources s ON s.id = i.source_id
-       WHERE s.geo IN ${G} ORDER BY mo.found_at >= datetime('now','-45 days') DESC, mo.amount DESC LIMIT 14`).all(),
+       WHERE s.geo IN ${G} AND (i.published_at IS NULL OR i.published_at >= date('now','-365 days')) ORDER BY mo.found_at >= datetime('now','-45 days') DESC, mo.amount DESC LIMIT 14`).all(),
     db.prepare(`SELECT mo.kind, COUNT(*) n, SUM(mo.amount) total FROM money mo JOIN items i ON i.id = mo.item_id JOIN sources s ON s.id = i.source_id
-       WHERE mo.found_at >= datetime('now','-90 days') AND s.geo IN ${G} GROUP BY mo.kind ORDER BY total DESC`).all(),
+       WHERE mo.found_at >= datetime('now','-90 days') AND s.geo IN ${G} AND (i.published_at IS NULL OR i.published_at >= date('now','-365 days')) GROUP BY mo.kind ORDER BY total DESC`).all(),
     db.prepare('SELECT * FROM awards ORDER BY start_date DESC, amount DESC LIMIT 10').all(),
     db.prepare(`SELECT i.tags, strftime('%Y-%W', i.found_at) wk, COUNT(*) n FROM items i JOIN sources s ON s.id = i.source_id
        WHERE i.found_at >= datetime('now','-56 days') AND i.type != 'context' AND s.geo IN ${G} GROUP BY i.tags, wk`).all(),
