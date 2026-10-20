@@ -1,8 +1,9 @@
 // Daily pipeline: fetch → diff → extract → score (rules) → summarize (cheap model, batched) → signals → brief.
-import { politeFetch, robotsAllows, sha256, extractLinks, contentLinks, parseFeed, mainText, pageTitle, pageDate,
+import { politeFetch, robustFetch, robotsAllows, sha256, extractLinks, contentLinks, parseFeed, mainText, pageTitle, pageDate,
   stripTags, dateFromText, lastDateIn, safeUrl, isoDate, today } from './util.js';
 import { scoreItem, watchRule } from './score.js';
 import { chat, budget as newBudget } from './llm.js';
+import { refreshMetrics, refreshAwards, storeMoney } from './data.js';
 
 const CADENCE_DAYS = { daily: 0.8, weekly: 6.5, monthly: 27 };
 
@@ -31,15 +32,19 @@ export async function runDaily(env, { trigger = 'cron', force = false, onProgres
   };
   await Promise.all([worker(), worker(), worker(), worker()]);
 
+  onProgress({ type: 'phase', phase: 'trends' });
+  try { const m = await refreshMetrics(env, { force }); onProgress({ type: 'data', name: 'Trend data (FRED)', ...m }); } catch (e) { onProgress({ type: 'data', name: 'Trend data (FRED)', error: String(e.message || e) }); }
+  try { const a = await refreshAwards(env, { force }); onProgress({ type: 'data', name: 'Federal awards (USAspending)', ...a }); } catch (e) { onProgress({ type: 'data', name: 'Federal awards (USAspending)', error: String(e.message || e) }); }
   onProgress({ type: 'phase', phase: 'summarizing' });
   await summarizeNew(env, ctx);
   onProgress({ type: 'phase', phase: 'brief' });
   const brief = await writeDailyBrief(env, ctx);
+  try { if (await writeEdaOutlook(env, ctx, { force })) onProgress({ type: 'data', name: 'EDA Outlook (last meeting + what is next)', ok: 1 }); } catch (e) { onProgress({ type: 'data', name: 'EDA Outlook', error: String(e.message || e) }); }
   if (new Date().getUTCDay() === 1) await writeWeekly(env, ctx).catch(() => {});
 
   await env.DB.prepare(`UPDATE runs SET finished_at = datetime('now'), ok = ?, sources_ok = ?, sources_failed = ?, items_new = ?, llm_calls = ? WHERE id = ?`)
     .bind(ctx.failed > ctx.ok ? 0 : 1, ctx.ok, ctx.failed, ctx.newItems, ctx.budget.used, run.id).run();
-  await env.KV.delete('dashboard:v1').catch(() => {});
+  await Promise.all(['norfolk', 'region', 'state'].flatMap(g => [env.KV.delete(`dashboard:v2:${g}`), env.KV.delete(`trends:${g}`)])).catch(() => {});
   const summary = { type: 'done', run: run.id, sourcesOk: ctx.ok, sourcesFailed: ctx.failed, newItems: ctx.newItems, llmCalls: ctx.budget.used, brief: !!brief };
   onProgress(summary);
   return summary;
@@ -51,9 +56,26 @@ export async function processSource(env, src, ctx, { dryRun = false } = {}) {
   try {
     const url = safeUrl(src.url);
     if (!url) throw new Error('URL not allowed');
+    if (src.kind === 'reference') {
+      // Linked, never fetched (robots.txt asks crawlers to stay out, or the document is too large to read).
+      if (dryRun) return { ok: true, method: 'reference', candidates: [{ url, title: src.name, published: null }] };
+      const added = await insertItem(env, src, { url, title: src.name, published: null, excerpt: '' }, ctx, { type: 'context', summary: 'Reference document, linked rather than read automatically.' });
+      await markOk(env, src, { newItems: added ? 1 : 0 });
+      return { ok: true, newItems: added ? 1 : 0 };
+    }
     if (!(await robotsAllows(env, url))) throw new Error('Blocked by robots.txt');
     const firstRun = !src.last_hash;
-    const r = await politeFetch(url, dryRun ? {} : { etag: src.etag, lastModified: src.last_modified });
+    let r;
+    try {
+      r = await robustFetch(env, url, dryRun ? {} : { etag: src.etag, lastModified: src.last_modified, maxBytes: src.kind === 'context' ? 30_000_000 : 6_000_000 });
+    } catch (e) {
+      if (/Too large/.test(e.message) && src.kind === 'context' && !dryRun) {
+        const added = await insertItem(env, src, { url, title: src.name, published: null, excerpt: '' }, ctx, { type: 'context', summary: 'Large report, linked rather than read automatically.' });
+        await markOk(env, src, { newItems: added ? 1 : 0 });
+        return { ok: true, newItems: added ? 1 : 0 };
+      }
+      throw e;
+    }
     if (r.status === 304) { if (!dryRun) await markOk(env, src, {}); return { ok: true, newItems: 0 }; }
     const hash = await sha256(r.isBinary ? r.body : r.body);
     if (!dryRun && hash === src.last_hash) { await markOk(env, src, { etag: r.etag, lastModified: r.lastModified }); return { ok: true, newItems: 0 }; }
@@ -94,9 +116,9 @@ export async function processSource(env, src, ctx, { dryRun = false } = {}) {
         pageFetches++;
         try {
           if (await robotsAllows(env, c.url)) {
-            const p = await politeFetch(c.url, { maxBytes: 3_000_000 });
-            if (p.isBinary) c.excerpt = (await pdfToText(env, p.body)).slice(0, 2000);
-            else { c.title = pageTitle(p.body) || c.title; c.published = c.published || pageDate(p.body); c.excerpt = mainText(p.body, 2000); }
+            const p = await robustFetch(env, c.url, { maxBytes: 3_000_000 });
+            if (p.isBinary) c.excerpt = (await pdfToText(env, p.body)).slice(0, 6000);
+            else { c.title = pageTitle(p.body) || c.title; c.published = c.published || pageDate(p.body); c.excerpt = mainText(p.body, 6000); }
           }
         } catch { /* keep link context */ }
       }
@@ -149,9 +171,10 @@ async function insertItem(env, src, c, ctx, extra = {}) {
   const row = await env.DB.prepare(`INSERT OR IGNORE INTO items (source_id, url, title, published_at, type, tags, score, rule_hits, summary, why, raw_excerpt, summarized)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`)
     .bind(src.id, c.url, (c.title || src.name).slice(0, 220), c.published || null, type, tags, s.score, [watch, ...s.hits].filter(Boolean).join(','),
-      extra.summary || null, extra.why || null, (c.excerpt || c.context || '').slice(0, 2500), extra.summary ? 1 : 0).first();
+      extra.summary || null, extra.why || null, (c.excerpt || c.context || '').slice(0, 6000), extra.summary ? 1 : 0).first();
   if (!row) return null;
   await env.DB.prepare('INSERT INTO citations (item_id, url, locator) VALUES (?,?,?)').bind(row.id, c.url, extra.locator || null).run();
+  if (type !== 'context') await storeMoney(env, row.id, `${c.title}. ${extra.moneyText || c.excerpt || ''}`).catch(() => {});
   if (type !== 'context' && (s.score >= 60 || watch)) {
     await env.DB.prepare('INSERT OR IGNORE INTO signals (item_id, rule_hit, score) VALUES (?,?,?)').bind(row.id, watch, s.score).run();
   }
@@ -178,7 +201,7 @@ async function handleMeetingDoc(env, src, c, ctx) {
 
   let text = '';
   try {
-    const r = await politeFetch(c.url, { maxBytes: 15_000_000 });
+    const r = await robustFetch(env, c.url, { maxBytes: 15_000_000 });
     text = r.isBinary ? await pdfToText(env, r.body) : stripTags(r.body);
   } catch { /* store the link even if the PDF can't be read */ }
 
@@ -200,8 +223,8 @@ async function handleMeetingDoc(env, src, c, ctx) {
   }
   if (!summary) summary = text ? `${docKind === 'minutes' ? 'Minutes' : 'Agenda'} posted.${amounts.length ? ' Amounts mentioned: ' + amounts.slice(0, 4).join(', ') + '.' : ''}${votes.length ? ' Votes recorded: ' + votes.slice(0, 3).join('; ') + '.' : ''}` : `${docKind === 'minutes' ? 'Minutes' : 'Agenda'} posted (PDF).`;
 
-  const itemId = await insertItem(env, { ...src, kind: 'meetings' }, { url: c.url, title, published: date ? `${date}T16:00:00.000Z` : null, excerpt: text.slice(0, 2500) }, ctx,
-    { type: 'meeting', summary, why, watch: 'EDA meeting document', locator: 'PDF' });
+  const itemId = await insertItem(env, { ...src, kind: 'meetings' }, { url: c.url, title, published: date ? `${date}T16:00:00.000Z` : null, excerpt: text.slice(0, 6000) }, ctx,
+    { type: 'meeting', summary, why, watch: 'EDA meeting document', locator: 'PDF', moneyText: text.slice(0, 20000) });
   await env.DB.prepare('INSERT OR IGNORE INTO meetings (item_id, body, doc_kind, meeting_date, doc_url, actions) VALUES (?,?,?,?,?,?)')
     .bind(itemId, body, docKind, date, c.url, JSON.stringify({ actions, amounts, votes })).run();
   return itemId;
@@ -269,7 +292,7 @@ async function synthesize(env, ctx, sig, kind) {
   const ids = new Set(sig.map(s => s.id));
   const out = await chat(env, 'synthesize', [
     { role: 'system', content: 'You write a neutral morning briefing on Norfolk, Virginia economic development for a civic leader. Use only the items given. Every bullet must cite the item ids it is based on. Never invent facts or numbers. Plain words, under 35 words per bullet.' },
-    { role: 'user', content: `Write the ${kind === 'weekly' ? 'weekly roll-up: group into themes, most important first' : "daily brief: what moved and why it matters"}. Return JSON {"bullets":[{"text":"...","items":[ids]}]} with at most ${kind === 'weekly' ? 6 : 5} bullets.\n\nITEMS:\n${JSON.stringify(sig.map(s => ({ id: s.id, source: s.source, title: s.title, summary: s.summary || '' })))}` },
+    { role: 'user', content: `Write the ${kind === 'weekly' ? 'weekly roll-up: group into themes, most important first' : 'daily brief: one entry per story, most important first. Each entry is a plain 1-2 sentence summary of that story and why it matters'}. Return JSON {"bullets":[{"text":"...","items":[ids]}]} with at most ${kind === 'weekly' ? 6 : 6} entries. Do not repeat the same story twice.\n\nITEMS:\n${JSON.stringify(sig.map(s => ({ id: s.id, source: s.source, title: s.title, summary: s.summary || '' })))}` },
   ], { json: true, budget: ctx.budget });
   const bullets = (out?.data?.bullets || [])
     .map(b => ({ text: String(b.text || '').slice(0, 400), items: (Array.isArray(b.items) ? b.items : []).map(Number).filter(i => ids.has(i)) }))
@@ -293,3 +316,50 @@ async function markOk(env, src, { etag, lastModified, hash, newItems = 0 }) {
       last_new = CASE WHEN ? > 0 THEN datetime('now') ELSE last_new END WHERE id = ?`)
     .bind(etag || null, lastModified || null, hash || null, newItems, src.id).run();
 }
+
+/**
+ * EDA Outlook: reads the latest EDA agendas/minutes (plus EDA-related news) and writes
+ * (1) what happened at the last meeting, (2) initiatives in motion, (3) topics likely on upcoming agendas.
+ * Upcoming topics are inferences and are labeled that way; every line cites the documents it rests on.
+ */
+export async function writeEdaOutlook(env, ctx, { force = false } = {}) {
+  const prev = await env.DB.prepare("SELECT created_at FROM briefs WHERE kind = 'eda_outlook' ORDER BY id DESC LIMIT 1").first();
+  const fresh = await env.DB.prepare(`SELECT COUNT(*) n FROM meetings WHERE body = 'EDA' AND created_at >= ?`).bind(ctx.startedAt).first('n');
+  const stale = !prev || Date.now() - Date.parse(prev.created_at.replace(' ', 'T') + 'Z') > 7 * 864e5;
+  if (!force && !fresh && !stale) return false;
+  const { results: docs } = await env.DB.prepare(`SELECT m.doc_kind, m.meeting_date, m.actions, i.id, i.title, i.summary, i.raw_excerpt FROM meetings m JOIN items i ON i.id = m.item_id
+      WHERE m.body = 'EDA' ORDER BY m.meeting_date DESC, m.id DESC LIMIT 5`).all();
+  const { results: news } = await env.DB.prepare(`SELECT i.id, i.title, i.summary FROM items i
+      WHERE i.type != 'context' AND i.found_at >= datetime('now','-60 days') AND (LOWER(i.title || ' ' || COALESCE(i.summary,'')) LIKE '%economic development%' OR LOWER(i.title || ' ' || COALESCE(i.summary,'')) LIKE '%eda%')
+      ORDER BY i.score DESC LIMIT 8`).all();
+  if (!docs.length) return false;
+  const ids = new Set([...docs, ...news].map(x => x.id));
+  const material = docs.map(d => {
+    const a = safeJson(d.actions) || {};
+    return `[${d.id}] EDA ${d.doc_kind} for ${d.meeting_date || 'unknown date'}\nSummary: ${d.summary || ''}\nActions: ${JSON.stringify((a.actions || []).slice(0, 8))}\nAmounts: ${(a.amounts || []).join(', ')}\nText: ${(d.raw_excerpt || '').replace(/\s+/g, ' ').slice(0, 2200)}`;
+  }).join('\n\n') + (news.length ? `\n\nRelated news:\n${news.map(n => `[${n.id}] ${n.title}. ${n.summary || ''}`).join('\n')}` : '');
+  const out = await chat(env, 'synthesize', [
+    { role: 'system', content: 'You are a careful civic analyst for Norfolk, Virginia. Use only the documents given. Copy dollar amounts and votes exactly. Clearly separate facts (what documents say) from inferences (what is likely next). Never invent names, numbers or dates. Plain words.' },
+    { role: 'user', content: `From these Norfolk Economic Development Authority (EDA) agendas, minutes and related news, return JSON:
+{"last_meeting":{"date":"YYYY-MM-DD or null","summary":"2-3 sentences on what the most recent meeting covered","decisions":[{"text":"one line, include exact amount/vote if stated","ids":[doc ids]}]},
+ "initiatives":[{"name":"short name","status":"one line on where it stands","ids":[doc ids]}],
+ "upcoming":[{"topic":"short topic","why":"one line: which document points to it (e.g. tabled, follow-up requested, recurring report, pending agreement)","confidence":"likely|possible","ids":[doc ids]}]}
+Max 6 decisions, 5 initiatives, 5 upcoming topics. Upcoming topics must come from evidence such as items tabled, deferred, scheduled for follow-up, recurring monthly reports, or agreements pending approval.
+
+DOCUMENTS:
+${material}` },
+  ], { json: true, budget: ctx.budget, maxTokens: 1100 });
+  const d = out?.data;
+  if (!d || !d.last_meeting) return false;
+  const clean = arr => (Array.isArray(arr) ? arr : []).map(x => ({ ...x, ids: (Array.isArray(x.ids) ? x.ids : []).map(Number).filter(i => ids.has(i)) }));
+  const body = {
+    last_meeting: { date: d.last_meeting.date || docs[0].meeting_date, summary: String(d.last_meeting.summary || '').slice(0, 700), decisions: clean(d.last_meeting.decisions).slice(0, 6) },
+    initiatives: clean(d.initiatives).slice(0, 5),
+    upcoming: clean(d.upcoming).filter(u => u.topic).slice(0, 5).map(u => ({ ...u, confidence: u.confidence === 'likely' ? 'likely' : 'possible' })),
+    docs: docs.map(x => ({ id: x.id, title: x.title, date: x.meeting_date, kind: x.doc_kind })),
+  };
+  await env.DB.prepare('INSERT INTO briefs (kind, period, body, model) VALUES (?,?,?,?) ON CONFLICT(kind, period) DO UPDATE SET body = excluded.body, model = excluded.model, created_at = datetime(\'now\')')
+    .bind('eda_outlook', new Date().toISOString().slice(0, 10), JSON.stringify(body), out.model).run();
+  return true;
+}
+const safeJson = s => { try { return JSON.parse(s); } catch { return null; } };

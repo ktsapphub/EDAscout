@@ -1,19 +1,30 @@
-// EDAScout front end: dashboard, Source Manager, Models, Listen + Ask. No framework, no build step.
+// EDAScout front end. Open to everyone; the edit key is asked for only when changing sources or settings.
 const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const app = $('#app');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-let me = { owner: false, publicView: false };
-let dash = null;
-let filter = 'All';
+const store = { get: k => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+const GEO_NAMES = { norfolk: 'Norfolk', region: 'Hampton Roads', state: 'Virginia' };
+let geo = ['norfolk', 'region', 'state'].includes(store.get('geo')) ? store.get('geo') : 'norfolk';
+let dash = null, trendData = null, filter = 'All', trendGroup = 'All', trendKey = null;
 
+// ---------------- helpers ----------------
 async function api(path, opts = {}) {
   const res = await fetch(path, { credentials: 'same-origin', headers: { 'content-type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.message || data.error || `HTTP ${res.status}`), { status: res.status, code: data.error });
   return data;
 }
-
+/** Run an edit action; if the server wants the edit key, ask once, then retry. */
+async function edit(fn) {
+  try { return await fn(); }
+  catch (e) {
+    if (e.code !== 'edit-key') throw e;
+    if (!(await askKey())) throw new Error('Edit cancelled');
+    return fn();
+  }
+}
 function toast(msg, action) {
   const t = $('#toast');
   t.innerHTML = `<span>${esc(msg)}</span>${action ? `<button>${esc(action.label)}</button>` : ''}`;
@@ -22,140 +33,203 @@ function toast(msg, action) {
   clearTimeout(toast.t);
   toast.t = setTimeout(() => (t.hidden = true), action ? 8000 : 3500);
 }
-
-const fmtDate = d => d ? new Date(d.length === 10 ? d + 'T12:00:00Z' : d.replace(' ', 'T') + (d.includes('T') || d.endsWith('Z') ? '' : 'Z')).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: d.length === 10 ? 'UTC' : undefined }) : '';
+const toDate = d => !d ? null : new Date(d.length === 10 ? d + 'T12:00:00Z' : (d.includes('T') ? d : d.replace(' ', 'T') + 'Z'));
+const fmtDate = d => d ? toDate(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: d.length === 10 ? 'UTC' : undefined }) : '';
 const ago = d => {
   if (!d) return 'never';
-  const t = Date.parse(d.includes('T') ? d : d.replace(' ', 'T') + 'Z');
-  const m = Math.round((Date.now() - t) / 60000);
+  const m = Math.round((Date.now() - toDate(d)) / 60000);
   return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 };
 const favicon = url => { try { return `https://icons.duckduckgo.com/ip3/${new URL(url).hostname}.ico`; } catch { return ''; } };
-const isFresh = d => d && Date.now() - Date.parse(d.replace(' ', 'T') + 'Z') < 30 * 3600e3;
-
-function countUp(el, to) {
-  if (reduce || !Number.isFinite(to)) { el.textContent = to; return; }
-  const t0 = performance.now();
-  const step = t => { const p = Math.min(1, (t - t0) / 600); el.textContent = Math.round(to * (1 - Math.pow(1 - p, 3))); if (p < 1) requestAnimationFrame(step); };
+const isFresh = d => d && Date.now() - toDate(d) < 30 * 3600e3;
+function money(v) {
+  const a = Math.abs(v);
+  return a >= 1e9 ? `$${(v / 1e9).toFixed(a >= 1e10 ? 0 : 1)}B` : a >= 1e6 ? `$${(v / 1e6).toFixed(a >= 1e7 ? 0 : 1)}M` : a >= 1e3 ? `$${Math.round(v / 1e3)}K` : `$${Math.round(v)}`;
+}
+function fmtVal(v, unit) {
+  if (v == null || !isFinite(v)) return '—';
+  if (unit === '$') return v >= 1e5 ? `$${Math.round(v / 1000).toLocaleString('en-US')}K` : `$${Math.round(v).toLocaleString('en-US')}`;
+  if (unit === '$M') return v >= 1000 ? `$${(v / 1000).toFixed(1)}B` : `$${Math.round(v).toLocaleString('en-US')}M`;
+  if (unit === '%') return `${v.toFixed(1)}%`;
+  if (unit === 'k') return `${v.toFixed(1)}k`;
+  if (unit === 'days') return `${Math.round(v)} days`;
+  if (unit === 'idx') return v.toFixed(0);
+  return Math.round(v).toLocaleString('en-US');
+}
+function countUp(el, to, fmt = v => Math.round(v)) {
+  if (reduce || !Number.isFinite(to)) { el.textContent = fmt(to); return; }
+  const t0 = performance.now(), from = 0;
+  const step = t => { const p = Math.min(1, (t - t0) / 900); el.textContent = fmt(from + (to - from) * (1 - Math.pow(1 - p, 3))); if (p < 1) requestAnimationFrame(step); };
   requestAnimationFrame(step);
 }
-
-function swap(render) {
-  if (document.startViewTransition && !reduce) document.startViewTransition(render); else render();
+const swap = render => (document.startViewTransition && !reduce) ? document.startViewTransition(render) : render();
+function reveal() {
+  const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }), { rootMargin: '0px 0px -8% 0px' });
+  $$('.reveal').forEach(z => { $$('.panel, .kpis, .metric', z).forEach((p, i) => p.style.setProperty('--i', i)); io.observe(z); });
 }
+function setStatus(kind, text) { const s = $('#runStatus'); s.querySelector('.dot').className = `dot ${kind}`; s.querySelector('.txt').textContent = text; }
+
+// ---------------- geography switch ----------------
+function placePill() {
+  const btn = $(`.scope [data-geo="${geo}"]`), pill = $('.scope-pill');
+  if (!btn) return;
+  pill.style.width = btn.offsetWidth + 'px';
+  pill.style.transform = `translateX(${btn.offsetLeft - 3}px)`;
+}
+$$('.scope button').forEach(b => b.onclick = () => {
+  if (b.dataset.geo === geo) return;
+  geo = b.dataset.geo; store.set('geo', geo);
+  $$('.scope button').forEach(x => x.setAttribute('aria-checked', x === b));
+  placePill();
+  dash = null; trendData = null; trendKey = null;
+  if (location.hash.replace(/^#\/?/, '') === '' ) renderDashboard(true); else location.hash = '#/';
+});
+addEventListener('resize', placePill);
+document.fonts?.ready.then(placePill);
+$$('.scope button').forEach(x => x.setAttribute('aria-checked', x.dataset.geo === geo));
 
 // ---------------- router ----------------
 async function router() {
   const r = location.hash.replace(/^#\/?/, '') || 'home';
-  document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === r));
-  me = await api('/api/me').catch(() => me);
-  document.querySelectorAll('.owner-only').forEach(el => (el.hidden = !me.owner));
-  $('#askFab').hidden = !(me.owner || me.publicView);
-  if (!me.owner && !me.publicView) return renderLogin();
-  if (r === 'admin' && me.owner) return renderSources();
-  if (r === 'models' && me.owner) return renderModels();
-  if (r === 'login') return renderLogin();
+  $$('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === r));
+  placePill();
+  if (r === 'sources') return renderSources();
+  if (r === 'models') return renderModels();
   return renderDashboard();
 }
 addEventListener('hashchange', router);
 
-// ---------------- login ----------------
-function renderLogin() {
-  setStatus('idle', 'Private');
-  app.innerHTML = `<section class="login">
-    <h1>EDAScout</h1>
-    <p class="muted">Norfolk economic development, every morning, with sources. Enter your owner key to open the dashboard on this device.</p>
-    <form id="lf"><label for="k">Owner key</label><input id="k" type="password" autocomplete="current-password" required><button class="btn primary">Open dashboard</button><p class="muted" id="lerr" role="alert"></p></form>
-  </section>`;
-  $('#lf').onsubmit = async e => {
-    e.preventDefault();
-    try { await api('/api/login', { method: 'POST', body: { key: $('#k').value.trim() } }); location.hash = '#/'; router(); }
-    catch (err) { $('#lerr').textContent = err.message; }
-  };
-}
-
 // ---------------- dashboard ----------------
-function setStatus(kind, text) {
-  const s = $('#runStatus');
-  s.querySelector('.dot').className = `dot ${kind}`;
-  s.querySelector('.txt').textContent = text;
-}
-
 function skeleton() {
   const sk = n => Array.from({ length: n }, (_, i) => `<div class="sk" style="width:${92 - i * 9}%"></div>`).join('');
-  return `<div class="zone"><div class="divider"><span>Today</span></div>
-    <div class="grid"><div class="span-12 kpis">${'<div class="kpi"><div class="sk" style="height:28px;width:50%"></div><div class="sk" style="width:70%"></div></div>'.repeat(4)}</div>
-    <section class="panel brief span-12"><div class="panel-head"><h2>Today's Brief</h2></div><div class="panel-body">${sk(5)}</div></section></div></div>
-    <div class="zone"><div class="divider"><span>Signals &amp; EDA</span></div><div class="grid">
-    <section class="panel span-7"><div class="panel-head"><h2>Signal Board</h2></div><div class="panel-body">${sk(8)}</div></section>
-    <section class="panel span-5"><div class="panel-head"><h2>EDA Watch</h2></div><div class="panel-body">${sk(6)}</div></section></div></div>`;
+  return `<div class="zone"><div class="divider"><span>Today</span></div><div class="grid"><div class="span-12 kpis">${'<div class="kpi"><div class="sk" style="height:28px;width:50%"></div><div class="sk" style="width:70%"></div></div>'.repeat(4)}</div>
+    <section class="panel brief span-12"><div class="panel-head"><h2>Today's Brief</h2></div><div class="panel-body">${sk(4)}</div></section></div></div>
+    <div class="zone"><div class="divider"><span>Trends</span></div><div class="metrics">${'<div class="metric"><div class="sk" style="width:60%"></div><div class="sk" style="height:24px;width:40%"></div><div class="sk" style="height:40px"></div></div>'.repeat(4)}</div></div>`;
 }
 
-async function renderDashboard() {
+async function renderDashboard(geoChange = false) {
   if (!dash) app.innerHTML = skeleton();
-  try { dash = await api('/api/dashboard'); }
-  catch (e) { if (e.status === 401) return renderLogin(); app.innerHTML = `<p class="empty">Couldn't load the dashboard: ${esc(e.message)}</p>`; return; }
+  try { [dash, trendData] = await Promise.all([api(`/api/dashboard?geo=${geo}`), api(`/api/trends?geo=${geo}`)]); }
+  catch (e) { app.innerHTML = `<p class="empty">Couldn't load the dashboard: ${esc(e.message)}</p>`; return; }
   swap(() => drawDashboard(dash));
+  ticker(dash.latest);
+  if (geoChange) toast(`Showing ${GEO_NAMES[geo]}`);
+}
+
+function ticker(list) {
+  const items = (list || []).slice(0, 14);
+  if (!items.length) { $('#ticker').innerHTML = ''; return; }
+  const html = items.map(r => `<a href="#" data-story="${r.id}"><b>${esc(r.source.split(/[(:]/)[0].trim().slice(0, 22))}</b>${esc(r.title.slice(0, 110))}</a>`).join('');
+  $('#ticker').innerHTML = html + html.replace(/<a /g, '<a aria-hidden="true" tabindex="-1" ');
+  $$('#ticker [data-story]').forEach(a => a.onclick = e => { e.preventDefault(); openStory(+a.dataset.story); });
 }
 
 function drawDashboard(d) {
   const run = d.lastRun;
   if (!run) setStatus('idle', 'No scan yet');
-  else if (!run.finished_at) setStatus('live', 'Scanning sources…');
-  else setStatus(run.ok ? '' : 'bad', `Last scan ${ago(run.finished_at)} · ${run.items_new} new`);
-
-  const tags = ['All', ...new Set(d.signals.flatMap(s => (s.tags || '').split(',').filter(Boolean)))].slice(0, 9);
-  const nextEda = d.kpis.nextEda;
+  else if (!run.finished_at && !run.stale) setStatus('live', 'Scanning sources…');
+  else setStatus(run.ok ? '' : 'bad', `Updated ${ago(run.finished_at || run.started_at)}`);
   const healthy = d.health?.ok || 0, total = (d.health?.ok || 0) + (d.health?.failing || 0) + (d.health?.pending || 0);
+  const g = GEO_NAMES[geo];
 
   app.innerHTML = `
-  <div class="zone"><div class="divider"><span>Today</span></div>
+  <section class="zone reveal" id="today"><div class="divider"><span>Today · ${g}</span></div>
     <div class="grid">
       <div class="span-12 kpis">
         <div class="kpi"><div class="n" data-count="${d.kpis.new_signals || 0}">0</div><div class="l">New signals in the last day</div></div>
-        <div class="kpi"><div class="n date">${nextEda ? fmtDate(nextEda) : '—'}</div><div class="l">Next EDA meeting (first Wed., noon)</div></div>
-        <div class="kpi"><div class="n" data-count="${d.kpis.total_items || 0}">0</div><div class="l">Items tracked with sources</div></div>
-        <div class="kpi"><div class="n" data-count="${healthy}">0</div><div class="l">Sources healthy of ${total}</div><div class="bar"><i data-w="${total ? Math.round(healthy / total * 100) : 0}"></i></div></div>
+        <div class="kpi"><div class="n date">${d.kpis.nextEda ? fmtDate(d.kpis.nextEda) : '—'}</div><div class="l">Next EDA meeting · <span class="countdown">${countdown(d.kpis.nextEda)}</span></div></div>
+        <div class="kpi"><div class="n" data-money="${(d.money.totals || []).reduce((a, t) => a + t.total, 0)}">$0</div><div class="l">Dollars mentioned in sources (90 days)</div></div>
+        <div class="kpi"><div class="n" data-count="${healthy}">0</div><div class="l">Sources reading cleanly of ${total}</div><div class="bar"><i data-w="${total ? Math.round(healthy / total * 100) : 0}"></i></div></div>
       </div>
       ${briefPanel(d)}
     </div>
-  </div>
+  </section>
 
-  <div class="zone"><div class="divider"><span>Signals &amp; EDA</span></div>
+  <section class="zone reveal" id="trends"><div class="divider"><span>Trends · ${g}</span><small>Source: FRED · change vs. a year earlier</small></div>
+    ${trendsBlock()}
+  </section>
+
+  <section class="zone reveal" id="signals"><div class="divider"><span>Signals &amp; EDA</span></div>
     <div class="grid">
       <section class="panel span-7 ${d.signals.some(s => isFresh(s.found_at)) ? 'has-new' : ''}">
-        <div class="panel-head"><h2>Signal Board</h2><span class="meta">${d.signals.length} active · ranked by relevance</span></div>
-        <div class="filters" role="toolbar" aria-label="Filter signals">${tags.map(t => `<button class="chip ${t === filter ? 'on' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>
+        <div class="panel-head"><h2>${ico('radar')}Signal Board</h2><span class="meta">${d.signals.length} active · ${g}</span></div>
+        <div class="filters" role="toolbar" aria-label="Filter signals">${['All', ...new Set(d.signals.flatMap(s => (s.tags || '').split(',').filter(Boolean)))].slice(0, 9).map(t => `<button class="chip ${t === filter ? 'on' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>
         <div class="panel-body flush scroll"><div class="cards" id="signalCards">${signalCards(d.signals)}</div></div>
       </section>
-      ${edaPanel(d, nextEda)}
+      ${edaPanel(d)}
+      ${outlookPanel(d)}
     </div>
-  </div>
+  </section>
 
-  <div class="zone"><div class="divider"><span>City Hall &amp; Latest</span></div>
+  <section class="zone reveal" id="money"><div class="divider"><span>Money &amp; Housing</span><small>Dollar figures found in sources · federal awards in Norfolk</small></div>
+    <div class="grid">${moneyPanel(d)}${awardsPanel(d)}</div>
+  </section>
+
+  <section class="zone reveal" id="cityhall"><div class="divider"><span>City Hall &amp; Latest</span></div>
     <div class="grid">
-      <section class="panel span-6"><div class="panel-head"><h2>City Hall Feed</h2><span class="meta">Council, Planning &amp; boards · iQM2</span></div>
-        <div class="panel-body flush">${d.cityhall.length ? `<ul class="rows">${d.cityhall.map(r => `<li><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a><span class="s">${esc(r.summary || '')}${r.summary ? ' · ' : ''}found ${ago(r.found_at)}</span></li>`).join('')}</ul>` : '<p class="empty" style="padding:16px">No City Hall items yet. They appear after the first scan.</p>'}</div></section>
-      <section class="panel span-6"><div class="panel-head"><h2>Latest from all sources</h2><span class="meta">newest first</span></div>
-        <div class="panel-body flush scroll" style="max-height:520px">${d.latest.length ? `<ul class="rows">${d.latest.map(r => `<li><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a><span class="s"><span class="src"><img src="${favicon(r.url)}" alt="" loading="lazy"> ${esc(r.source)}</span> · ${ago(r.found_at)}</span></li>`).join('')}</ul>` : '<p class="empty" style="padding:16px">Nothing yet.</p>'}</div></section>
+      <section class="panel span-6"><div class="panel-head"><h2>${ico('hall')}City Hall Feed</h2><span class="meta">Council, Planning &amp; boards</span></div>
+        <div class="panel-body flush">${d.cityhall.length ? `<ul class="rows">${d.cityhall.map(r => `<li><button class="linkbtn" data-story="${r.id}">${esc(r.title)}</button><span class="s">${esc(r.summary || '')}${r.summary ? ' · ' : ''}found ${ago(r.found_at)}</span></li>`).join('')}</ul>` : '<p class="empty" style="padding:16px">City Hall meetings appear once iQM2 answers. EDAScout retries through a browser automatically.</p>'}</div></section>
+      <section class="panel span-6"><div class="panel-head"><h2>${ico('feed')}Latest from all sources</h2><span class="meta">${g} · newest first</span></div>
+        <div class="panel-body flush scroll" style="max-height:520px">${d.latest.length ? `<ul class="rows">${d.latest.map(r => `<li><button class="linkbtn" data-story="${r.id}">${esc(r.title)}</button><span class="s"><span class="src"><img src="${favicon(r.url)}" alt="" loading="lazy"> ${esc(r.source)}</span> · ${ago(r.found_at)}</span></li>`).join('')}</ul>` : '<p class="empty" style="padding:16px">Nothing yet.</p>'}</div></section>
     </div>
-  </div>
+  </section>
 
-  ${d.weekly ? `<div class="zone"><div class="divider"><span>Weekly Roll-up</span></div><div class="grid"><section class="panel span-12"><div class="panel-head"><h2>Week ${esc(d.weekly.period)}</h2></div><div class="panel-body"><ol>${d.weekly.bullets.map(b => `<li style="margin:6px 0">${esc(b.text)} ${b.items.map(i => d.cites[i] ? `<a href="${esc(d.cites[i].url)}" target="_blank" rel="noopener">[${esc(d.cites[i].source)}]</a>` : '').join(' ')}</li>`).join('')}</ol></div></section></div></div>` : ''}`;
+  <section class="zone reveal" id="topics"><div class="divider"><span>What's heating up</span><small>Items per topic, last 8 weeks</small></div>
+    <div class="grid">
+      <section class="panel span-5"><div class="panel-head"><h2>${ico('trend')}Topic momentum</h2><span class="meta">green = this week</span></div>
+        <div class="panel-body flush">${topicsList(d.topics)}</div></section>
+      <section class="panel span-7"><div class="panel-head"><h2>${ico('book')}Plans &amp; research library</h2><span class="meta">context, not news</span></div>
+        <div class="lib">${d.library.map(r => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title.slice(0, 90))}<span>${esc(r.source)}</span></a>`).join('') || '<p class="empty">Loads after the first scan.</p>'}</div></section>
+    </div>
+  </section>
 
-  app.querySelectorAll('[data-count]').forEach(el => countUp(el, +el.dataset.count));
-  requestAnimationFrame(() => app.querySelectorAll('[data-w]').forEach(el => (el.style.width = el.dataset.w + '%')));
+  ${d.weekly ? `<section class="zone reveal"><div class="divider"><span>Weekly Roll-up · ${esc(d.weekly.period)}</span></div><div class="grid"><section class="panel span-12"><div class="panel-body"><div class="stories">${d.weekly.bullets.map((b, i) => storyCard(b, i, d)).join('')}</div></div></section></div></section>` : ''}`;
+
+  $$('[data-count]').forEach(el => countUp(el, +el.dataset.count));
+  $$('[data-money]').forEach(el => countUp(el, +el.dataset.money, money));
+  requestAnimationFrame(() => $$('.kpi [data-w]').forEach(el => (el.style.width = el.dataset.w + '%')));
   wireDashboard(d);
+  drawTrendChart();
+  reveal();
+}
+
+const ICONS = {
+  radar: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 12l6-6"/>',
+  hall: '<path d="M3 21h18M5 21V10M19 21V10M9 21V10M15 21V10M2 10l10-6 10 6z"/>',
+  feed: '<path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>',
+  trend: '<path d="M3 17l6-6 4 4 8-8M15 7h6v6"/>',
+  book: '<path d="M4 19V5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2zM8 7h8"/>',
+  coin: '<circle cx="12" cy="12" r="9"/><path d="M15 9a3 3 0 0 0-3-1.5c-1.7 0-3 .9-3 2.2s1.3 1.8 3 2.1 3 .9 3 2.2-1.3 2.2-3 2.2A3 3 0 0 1 9 15M12 6v12"/>',
+  flag: '<path d="M5 21V4h11l-2 4 2 4H5"/>',
+  cal: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>',
+};
+const ico = k => `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[k]}</svg>`;
+
+function countdown(d) {
+  if (!d) return '';
+  const days = Math.ceil((toDate(d) - Date.now()) / 864e5);
+  return days <= 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
+}
+
+function storyCard(b, i, d) {
+  const it = d.cites[b.items[0]];
+  return `<article class="story" style="animation-delay:${i * 70}ms" data-i="${i}">
+    <span class="num">${i + 1}</span>
+    ${it ? `<h3>${esc(it.title.slice(0, 140))}</h3>` : ''}
+    <p>${esc(b.text)}</p>
+    <div class="row"><span class="src">${b.items.map(id => d.cites[id]?.source).filter(Boolean).slice(0, 2).map(esc).join(' · ')}</span>
+      ${it ? `<button class="read" data-story="${it.id}">Read story ↗</button>` : ''}</div>
+  </article>`;
 }
 
 function briefPanel(d) {
   const b = d.brief;
   const body = b && b.bullets?.length
-    ? `<ol id="briefList">${b.bullets.map((x, i) => `<li data-i="${i}"><div>${esc(x.text)}<div class="cite">${x.items.map(id => d.cites[id] ? `<a href="${esc(d.cites[id].url)}" target="_blank" rel="noopener" title="${esc(d.cites[id].title)}">${esc(d.cites[id].source)} ↗</a>` : '').join('')}</div></div></li>`).join('')}</ol>`
-    : `<p class="empty">No brief yet. ${me.owner ? 'Open <a href="#/admin" style="color:#fff">Sources</a> and press <b>Run scan now</b> to build the first one.' : 'The first one arrives after the morning scan.'}</p>`;
+    ? `<div class="stories" id="briefList">${b.bullets.map((x, i) => storyCard(x, i, d)).join('')}</div>`
+    : `<p class="empty">No brief yet. Open <a href="#/sources">Sources</a> and press <b>Run scan now</b> to build the first one.</p>`;
   return `<section class="panel brief span-12">
     <div class="panel-head"><h2>Today's Brief</h2>
-      <span class="meta">${b ? `${fmtDate(b.period)} · ${b.generated === 'rules' ? 'rules-only (AI budget saved)' : 'AI summary'} · every line linked` : ''}</span>
+      <span class="meta">${b ? `${fmtDate(b.period)} · ${b.generated === 'rules' ? 'quick summary' : 'AI summary'} · tap a story for details` : ''}</span>
       ${b?.bullets?.length ? `<button class="listen" id="listen"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="wave"><i></i><i></i><i></i><i></i></span><span class="lt">Listen</span></button>` : ''}
     </div>
     <div class="panel-body">${body}</div>
@@ -164,11 +238,11 @@ function briefPanel(d) {
 
 function signalCards(list) {
   const shown = list.filter(s => filter === 'All' || (s.tags || '').split(',').includes(filter));
-  if (!shown.length) return `<p class="empty" style="padding:16px">${list.length ? 'No signals with this tag.' : 'No signals yet. They appear after the first scan.'}</p>`;
+  if (!shown.length) return `<p class="empty" style="padding:16px">${list.length ? 'No signals with this tag.' : `No signals for ${GEO_NAMES[geo]} yet.`}</p>`;
   return shown.map((s, i) => {
     const rule = s.rule_hit || (s.rule_hits || '').split(',')[0];
     return `<article class="card ${isFresh(s.found_at) ? 'fresh' : ''} ${s.status === 'pinned' ? 'pinned' : ''}" style="animation-delay:${Math.min(i, 12) * 40}ms" data-id="${s.id}">
-      <h3><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a></h3>
+      <h3><button data-story="${s.id}">${esc(s.title)}</button></h3>
       <div class="score" title="Relevance score"><b>${s.score}</b><span class="bar"><i data-w="${s.score}"></i></span></div>
       ${s.summary ? `<p class="sum">${esc(s.summary)}</p>` : ''}
       ${s.why ? `<p class="why"><b>Why it matters:</b> ${esc(s.why)}</p>` : ''}
@@ -177,63 +251,252 @@ function signalCards(list) {
         <span>· ${s.published_at ? fmtDate(s.published_at) : 'found ' + ago(s.found_at)}</span>
         ${(s.tags || '').split(',').filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join('')}
         ${rule ? `<span class="tag rule">${esc(rule)}</span>` : ''}
-        <a href="${esc(s.url)}" target="_blank" rel="noopener">Source ↗</a>
-        ${me.owner ? `<span class="card-actions"><button class="mini" data-act="${s.status === 'pinned' ? 'new' : 'pinned'}">${s.status === 'pinned' ? 'Unpin' : 'Pin'}</button><button class="mini" data-act="dismissed">Dismiss</button></span>` : ''}
+        <span class="card-actions"><button class="mini" data-act="${s.status === 'pinned' ? 'new' : 'pinned'}">${s.status === 'pinned' ? 'Unpin' : 'Pin'}</button><button class="mini" data-act="dismissed">Dismiss</button></span>
       </div>
     </article>`;
   }).join('');
 }
 
-function edaPanel(d, nextEda) {
-  const dt = nextEda ? new Date(nextEda + 'T12:00:00Z') : null;
+function edaPanel(d) {
+  const nextEda = d.kpis.nextEda, dt = nextEda ? toDate(nextEda) : null;
   const meets = d.meetings.map(m => {
     const a = m.actions || {};
     const acts = (a.actions || []).filter(x => x.item).slice(0, 4);
     return `<div class="meet">
-      <div class="k"><span class="kind">${esc(m.body)} ${esc(m.doc_kind)}</span><span>${m.meeting_date ? fmtDate(m.meeting_date) : ''}</span><a href="${esc(m.doc_url)}" target="_blank" rel="noopener" style="margin-left:auto">PDF ↗</a></div>
+      <div class="k"><span class="kind">${esc(m.body)} ${esc(m.doc_kind)}</span><span>${m.meeting_date ? fmtDate(m.meeting_date) : ''}</span>${m.id ? `<button class="linkbtn" data-story="${m.id}" style="margin-left:auto;font-size:12px">Details</button>` : ''}<a href="${esc(m.doc_url)}" target="_blank" rel="noopener" style="font-size:12px">PDF ↗</a></div>
       ${m.summary ? `<h3>${esc(m.summary)}</h3>` : ''}
-      ${acts.length ? `<ul>${acts.map(x => `<li>${esc(x.item)}${x.outcome ? ` · <i>${esc(x.outcome)}</i>` : ''}${x.amount_usd ? ` <span class="amt">${esc(x.amount_usd)}</span>` : ''}${x.vote ? ` <span class="amt">${esc(x.vote)}</span>` : ''}</li>`).join('')}</ul>`
-        : (a.amounts?.length ? `<ul><li>Amounts in document: ${a.amounts.slice(0, 4).map(x => `<span class="amt">${esc(x)}</span>`).join(' ')}</li></ul>` : '')}
+      ${acts.length ? `<ul>${acts.map(x => `<li>${esc(x.item)}${x.outcome ? ` · <i>${esc(x.outcome)}</i>` : ''}${x.amount_usd ? ` <span class="amtchip">${esc(x.amount_usd)}</span>` : ''}${x.vote ? ` <span class="amtchip">${esc(x.vote)}</span>` : ''}</li>`).join('')}</ul>`
+        : (a.amounts?.length ? `<ul><li>Amounts in document: ${a.amounts.slice(0, 4).map(x => `<span class="amtchip">${esc(x)}</span>`).join(' ')}</li></ul>` : '')}
     </div>`;
   }).join('');
   return `<section class="panel span-5 ${d.meetings.some(m => isFresh(m.created_at)) ? 'has-new' : ''}">
-    <div class="panel-head"><h2>EDA Watch</h2><span class="meta">agendas &amp; minutes</span></div>
+    <div class="panel-head"><h2>${ico('cal')}EDA Watch</h2><span class="meta">agendas &amp; minutes</span></div>
     ${dt ? `<div class="next-meet"><div class="cal"><div class="m">${dt.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })}</div><div class="d">${dt.getUTCDate()}</div></div>
-      <div><b>Next EDA meeting</b><div class="muted" style="font-size:13px">Wednesday, 12:00 PM · 999 Waterside Dr., Suite 400<br>Budget committee 11:15 AM. <a href="https://norfolkdevelopment.com/target-industries/the-norfolk-economic-development-authority/" target="_blank" rel="noopener">Confirm on EDA page ↗</a></div></div></div>` : ''}
-    <div class="panel-body flush scroll" style="max-height:640px">${meets || '<p class="empty" style="padding:16px">Agendas and minutes appear after the first scan.</p>'}</div>
+      <div><b>Next EDA meeting</b> <span class="countdown">${countdown(nextEda)}</span><div class="muted" style="font-size:13px">Wednesday, 12:00 PM · 999 Waterside Dr., Suite 400. Budget committee 11:15 AM. <a href="https://norfolkdevelopment.com/target-industries/the-norfolk-economic-development-authority/" target="_blank" rel="noopener">Confirm on EDA page ↗</a></div></div></div>` : ''}
+    <div class="panel-body flush scroll" style="max-height:620px">${meets || '<p class="empty" style="padding:16px">Agendas and minutes appear once the EDA site answers. EDAScout now retries through a browser.</p>'}</div>
   </section>`;
 }
 
-function wireDashboard(d) {
-  app.querySelectorAll('.chip').forEach(c => c.onclick = () => {
-    filter = c.dataset.tag;
-    app.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === c));
-    swap(() => { $('#signalCards').innerHTML = signalCards(d.signals); bars(); wireCards(d); });
+function outlookPanel(d) {
+  const o = d.outlook;
+  const refs = ids => (ids || []).map(id => d.cites[id]).filter(Boolean).slice(0, 3).map(c => `<button class="linkbtn" data-story="${c.id}">${esc(c.title.replace(/^EDA /, '').slice(0, 46))}</button>`).join(' · ');
+  if (!o) return `<section class="panel span-12"><div class="panel-head"><h2>${ico('radar')}EDA Outlook</h2><span class="meta">last meeting · in motion · what's next</span></div><div class="panel-body"><p class="empty">Once EDAScout reads the EDA's agendas and minutes, this panel explains the last meeting, the initiatives in motion, and what is likely on upcoming agendas, each linked to its evidence.</p></div></section>`;
+  const lm = o.last_meeting || {};
+  return `<section class="panel span-12 outlook"><div class="panel-head"><h2>${ico('radar')}EDA Outlook</h2><span class="meta">from ${o.docs?.length || 0} EDA documents · updated ${ago(o.created)}</span></div>
+    <div class="panel-body"><div class="ol-grid">
+      <div class="ol-col"><h4>Last meeting${lm.date ? ` · ${fmtDate(lm.date)}` : ''}</h4><p>${esc(lm.summary || '')}</p>
+        ${lm.decisions?.length ? `<ul class="ol-list">${lm.decisions.map(x => `<li><span class="ol-dot done"></span><div>${esc(x.text)}<div class="s">${refs(x.ids)}</div></div></li>`).join('')}</ul>` : ''}</div>
+      <div class="ol-col"><h4>In motion</h4>${o.initiatives?.length ? `<ul class="ol-list">${o.initiatives.map(x => `<li><span class="ol-dot live"></span><div><b>${esc(x.name)}</b> ${esc(x.status || '')}<div class="s">${refs(x.ids)}</div></div></li>`).join('')}</ul>` : '<p class="muted">No ongoing initiatives found in recent documents.</p>'}</div>
+      <div class="ol-col"><h4>Likely next <span class="tag rule">inferred</span></h4>${o.upcoming?.length ? `<ul class="ol-list">${o.upcoming.map(x => `<li><span class="ol-dot ${x.confidence}"></span><div><b>${esc(x.topic)}</b> <span class="tag ${x.confidence === 'likely' ? 'rule' : 'geo'}">${esc(x.confidence)}</span><div>${esc(x.why || '')}</div><div class="s">${refs(x.ids)}</div></div></li>`).join('')}</ul>` : '<p class="muted">No forward-looking items found yet.</p>'}
+        <p class="muted" style="font-size:12px;margin-top:8px">Forecasts are inferred from tabled items, follow-ups and recurring reports in the documents. Check the official agenda before the meeting.</p></div>
+    </div></div></section>`;
+}
+
+function moneyPanel(d) {
+  const totals = (d.money.totals || []).slice(0, 4);
+  const items = d.money.items || [];
+  return `<section class="panel span-7"><div class="panel-head"><h2>${ico('coin')}Money tracker</h2><span class="meta">${GEO_NAMES[geo]} · last 90 days</span></div>
+    ${totals.length ? `<div class="money-totals">${totals.map(t => `<div class="mt"><div class="n" data-money="${t.total}">$0</div><div class="l">${esc(t.kind)} · ${t.n} mention${t.n > 1 ? 's' : ''}</div></div>`).join('')}</div>` : ''}
+    <div class="panel-body flush scroll" style="max-height:460px">${items.length ? items.map(m => `<div class="money-row">
+      <div><div class="amt">${money(m.amount)}</div><span class="tag k">${esc(m.kind)}</span></div>
+      <div><p>${esc(m.label)}</p><div class="s"><button class="linkbtn" data-story="${m.id}">${esc(m.title.slice(0, 90))}</button> · ${esc(m.source)}</div></div>
+    </div>`).join('') : '<p class="empty" style="padding:16px">Dollar figures (investments, grants, approvals, housing, budget) appear as sources mention them.</p>'}</div>
+  </section>`;
+}
+
+function awardsPanel(d) {
+  const a = d.awards || [];
+  return `<section class="panel span-5"><div class="panel-head"><h2>${ico('flag')}Federal money in Norfolk</h2><span class="meta">USAspending · last 60 days</span></div>
+    <div class="panel-body flush scroll" style="max-height:540px">${a.length ? `<ul class="rows">${a.map(x => `<li><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.recipient || 'Recipient')}</a> <span class="amtchip">${money(x.amount)}</span><span class="s">${esc(x.agency)}${x.start_date ? ' · ' + fmtDate(x.start_date) : ''}${x.description ? ' · ' + esc(x.description.slice(0, 110).toLowerCase()) : ''}</span></li>`).join('')}</ul>` : '<p class="empty" style="padding:16px">Federal contracts and grants performed in Norfolk load with the next scan.</p>'}</div>
+  </section>`;
+}
+
+function topicsList(t) {
+  if (!t?.list?.length) return '<p class="empty" style="padding:16px">Builds up as items arrive.</p>';
+  const max = Math.max(1, ...t.list.flatMap(x => x.weeks));
+  return `<ul class="topics">${t.list.map(x => `<li><span>${esc(x.tag)}</span><span class="bars" title="${x.weeks.join(', ')} items per week">${x.weeks.map((n, j) => `<i style="height:${Math.max(6, n / max * 100)}%;--j:${j}"></i>`).join('')}</span><span class="t">${x.total}</span></li>`).join('')}</ul>`;
+}
+
+// ---------------- trends ----------------
+function trendsBlock() {
+  const ms = trendData?.metrics || [];
+  if (!ms.length) return `<section class="panel"><div class="panel-body"><p class="empty">Trend data for ${GEO_NAMES[geo]} loads with the next scan (weekly from the Federal Reserve's FRED database).</p></div></section>`;
+  const groups = ['All', ...new Set(ms.map(m => m.group))];
+  const shown = ms.filter(m => trendGroup === 'All' || m.group === trendGroup);
+  if (!trendKey || !ms.some(m => m.key === trendKey)) trendKey = shown[0]?.key;
+  return `<div class="trend-head"><div class="groups" role="toolbar" aria-label="Trend groups">${groups.map(g => `<button class="chip ${g === trendGroup ? 'on' : ''}" data-group="${g}">${g}</button>`).join('')}</div></div>
+    <div class="metrics" id="metricCards">${shown.map(m => metricCard(m)).join('')}</div>
+    <section class="panel" style="margin-top:16px"><div class="panel-head"><h2 id="chartTitle">${ico('trend')}</h2><span class="meta" id="chartMeta"></span></div>
+      <div class="panel-body"><div class="chart-wrap" id="chartWrap"></div><details class="tbl"><summary>Show as a table</summary><div id="chartTable"></div></details></div></section>`;
+}
+
+function metricCard(m) {
+  const good = m.better === 'neutral' || m.change == null ? 'flat' : (m.change > 0) === (m.better === 'up') ? 'good' : 'bad';
+  const arrow = m.change == null ? '' : m.change > 0 ? '▲' : m.change < 0 ? '▼' : '•';
+  const chg = m.pct == null ? '' : m.unit === '%' ? `${arrow} ${Math.abs(m.change).toFixed(1)} pts` : `${arrow} ${Math.abs(m.pct).toFixed(1)}%`;
+  return `<button class="metric ${m.key === trendKey ? 'on' : ''}" data-key="${m.key}" aria-pressed="${m.key === trendKey}">
+    <span class="k">${esc(m.label)}</span>
+    <span class="v" data-val="${m.latest.v}" data-unit="${m.unit}">${fmtVal(m.latest.v, m.unit)}</span>
+    <span class="d">${chg ? `<span class="chg ${good}">${chg}</span>` : ''}<span class="muted">${fmtDate(m.latest.d)}</span></span>
+    ${spark(m.points)}
+  </button>`;
+}
+
+function spark(pts) {
+  if (!pts || pts.length < 2) return '';
+  const W = 200, H = 46, vs = pts.map(p => p.v), lo = Math.min(...vs), hi = Math.max(...vs), r = hi - lo || 1;
+  const xy = pts.map((p, i) => [i / (pts.length - 1) * W, H - 4 - (p.v - lo) / r * (H - 10)]);
+  const d = xy.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('');
+  const last = xy[xy.length - 1];
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+    <defs><linearGradient id="sparkFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#225081" stop-opacity=".18"/><stop offset="1" stop-color="#225081" stop-opacity="0"/></linearGradient></defs>
+    <path class="area" d="${d}L${W},${H}L0,${H}Z"/><path class="line draw" d="${d}" vector-effect="non-scaling-stroke" pathLength="1" style="--len:1"/>
+    <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="3.5" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+function niceTicks(lo, hi, n = 4) {
+  const span = hi - lo || Math.abs(hi) || 1, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map(s => s * mag).find(s => span / s <= n) || mag * 10;
+  const a = Math.floor(lo / step) * step, out = [];
+  for (let v = a; v <= hi + step * .5; v += step) out.push(+v.toFixed(10));
+  return out;
+}
+
+function drawTrendChart() {
+  const wrap = $('#chartWrap');
+  const m = trendData?.metrics?.find(x => x.key === trendKey);
+  if (!wrap || !m) return;
+  $('#chartTitle').innerHTML = `${ico('trend')}${esc(m.label)} · ${GEO_NAMES[geo]}`;
+  $('#chartMeta').innerHTML = `<a href="${esc(m.source)}" target="_blank" rel="noopener">FRED ${esc(m.series)} ↗</a>`;
+  const pts = m.points, W = Math.max(320, wrap.clientWidth), H = 280, P = { l: 64, r: 18, t: 16, b: 30 };
+  const vs = pts.map(p => p.v), ticks = niceTicks(Math.min(...vs), Math.max(...vs));
+  const lo = ticks[0], hi = ticks[ticks.length - 1];
+  const t0 = toDate(pts[0].d) - 0, t1 = toDate(pts[pts.length - 1].d) - 0;
+  const X = d => P.l + ((toDate(d) - t0) / ((t1 - t0) || 1)) * (W - P.l - P.r);
+  const Y = v => P.t + (1 - (v - lo) / ((hi - lo) || 1)) * (H - P.t - P.b);
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.d).toFixed(1)},${Y(p.v).toFixed(1)}`).join('');
+  const years = [...new Set(pts.map(p => p.d.slice(0, 4)))];
+  const ystep = Math.ceil(years.length / Math.max(2, Math.floor(W / 90)));
+  wrap.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(m.label)} in ${GEO_NAMES[geo]}, ${fmtVal(m.latest.v, m.unit)} as of ${fmtDate(m.latest.d)}">
+    <defs><linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#225081" stop-opacity=".16"/><stop offset="1" stop-color="#225081" stop-opacity="0"/></linearGradient></defs>
+    <g class="grid">${ticks.map(t => `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(t)}" y2="${Y(t)}"/>`).join('')}</g>
+    <g class="axis">${ticks.map(t => `<text x="${P.l - 8}" y="${Y(t) + 4}" text-anchor="end">${fmtVal(t, m.unit)}</text>`).join('')}
+      ${years.filter((_, i) => i % ystep === 0).map(y => `<text x="${X(y + '-01-01')}" y="${H - 8}" text-anchor="middle">${y}</text>`).join('')}</g>
+    <path class="area" d="${line}L${X(pts[pts.length - 1].d)},${H - P.b}L${X(pts[0].d)},${H - P.b}Z" opacity="0"><animate attributeName="opacity" from="0" to="1" dur=".8s" begin=".4s" fill="freeze"/></path>
+    <path class="line draw" d="${line}" pathLength="1" style="--len:1"/>
+    <line class="cross" y1="${P.t}" y2="${H - P.b}" opacity="0"/>
+    <circle class="hot" r="5" cx="${X(pts[pts.length - 1].d)}" cy="${Y(pts[pts.length - 1].v)}"/>
+    <rect x="${P.l}" y="${P.t}" width="${W - P.l - P.r}" height="${H - P.t - P.b}" fill="transparent" class="hit"/>
+  </svg><div class="tip" style="opacity:0"></div>`;
+  requestAnimationFrame(() => wrap.classList.add('drawn'));
+  const svg = $('svg', wrap), tip = $('.tip', wrap), cross = $('.cross', svg), hot = $('.hot', svg);
+  const move = e => {
+    const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) * (W / r.width);
+    let best = pts[0];
+    for (const p of pts) if (Math.abs(X(p.d) - x) < Math.abs(X(best.d) - x)) best = p;
+    const cx = X(best.d), cy = Y(best.v);
+    cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('opacity', 1);
+    hot.setAttribute('cx', cx); hot.setAttribute('cy', cy);
+    tip.style.opacity = 1; tip.style.left = `${cx / W * 100}%`; tip.style.top = `${cy / H * 100}%`;
+    tip.innerHTML = `${fmtDate(best.d)} · <b>${fmtVal(best.v, m.unit)}</b>`;
+  };
+  $('.hit', svg).addEventListener('pointermove', move);
+  $('.hit', svg).addEventListener('pointerleave', () => { tip.style.opacity = 0; cross.setAttribute('opacity', 0); });
+  $('#chartTable').innerHTML = `<table class="trend-table"><thead><tr><th>Date</th><th>${esc(m.label)}</th></tr></thead><tbody>${[...pts].reverse().slice(0, 24).map(p => `<tr><td>${fmtDate(p.d)}</td><td class="n">${fmtVal(p.v, m.unit)}</td></tr>`).join('')}</tbody></table>`;
+}
+
+function wireTrends() {
+  $$('[data-group]').forEach(b => b.onclick = () => { trendGroup = b.dataset.group; trendKey = null; swap(() => { $('#trends').innerHTML = `<div class="divider"><span>Trends · ${GEO_NAMES[geo]}</span><small>Source: FRED · change vs. a year earlier</small></div>${trendsBlock()}`; $('#trends').classList.add('in'); wireTrends(); drawTrendChart(); }); });
+  $$('.metric').forEach(b => b.onclick = () => {
+    trendKey = b.dataset.key;
+    $$('.metric').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
+    drawTrendChart();
+    if (innerWidth < 720) $('#chartWrap').scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
   });
-  bars();
-  wireCards(d);
+}
+
+function wireDashboard(d) {
+  $$('.filters .chip').forEach(c => c.onclick = () => {
+    filter = c.dataset.tag;
+    $$('.filters .chip').forEach(x => x.classList.toggle('on', x === c));
+    swap(() => { $('#signalCards').innerHTML = signalCards(d.signals); bars(); wireCards(d); wireStories(); });
+  });
+  bars(); wireCards(d); wireStories(); wireTrends();
   const L = $('#listen');
   if (L) L.onclick = () => listen(d, L);
 }
-const bars = () => requestAnimationFrame(() => app.querySelectorAll('.score [data-w]').forEach(el => (el.style.width = el.dataset.w + '%')));
+const bars = () => requestAnimationFrame(() => $$('.score [data-w]').forEach(el => (el.style.width = el.dataset.w + '%')));
+const wireStories = () => $$('[data-story]', app).forEach(b => b.onclick = e => { e.preventDefault(); openStory(+b.dataset.story); });
 
 function wireCards(d) {
-  app.querySelectorAll('.card [data-act]').forEach(b => b.onclick = async () => {
+  $$('.card [data-act]').forEach(b => b.onclick = async () => {
     const card = b.closest('.card'), id = +card.dataset.id, status = b.dataset.act;
     try {
-      await api(`/api/signals/${id}`, { method: 'POST', body: { status } });
+      await edit(() => api(`/api/signals/${id}`, { method: 'POST', body: { status } }));
       const s = d.signals.find(x => x.id === id);
       if (status === 'dismissed') {
         d.signals = d.signals.filter(x => x.id !== id);
         card.style.transition = 'opacity .25s, transform .25s'; card.style.opacity = 0; card.style.transform = 'translateX(16px)';
-        setTimeout(() => { $('#signalCards').innerHTML = signalCards(d.signals); bars(); wireCards(d); }, 250);
-        toast('Signal dismissed', { label: 'Undo', run: async () => { await api(`/api/signals/${id}`, { method: 'POST', body: { status: 'new' } }); renderDashboard(); } });
-      } else { s.status = status; $('#signalCards').innerHTML = signalCards(d.signals); bars(); wireCards(d); }
-    } catch (e) { toast(e.message); }
+        setTimeout(() => { $('#signalCards').innerHTML = signalCards(d.signals); bars(); wireCards(d); wireStories(); }, 250);
+        toast('Signal dismissed', { label: 'Undo', run: async () => { await api(`/api/signals/${id}`, { method: 'POST', body: { status: 'new' } }); dash = null; renderDashboard(); } });
+      } else { s.status = status; $('#signalCards').innerHTML = signalCards(d.signals); bars(); wireCards(d); wireStories(); }
+    } catch (e) { if (e.message !== 'Edit cancelled') toast(e.message); }
   });
 }
 
-// ---------------- Listen (free, uses the browser's own voice) ----------------
+// ---------------- story modal ----------------
+let lastFocus = null;
+function openModal(html) {
+  lastFocus = document.activeElement;
+  const m = $('#modal'), back = $('#modalBack');
+  m.innerHTML = html; m.hidden = false; back.hidden = false;
+  document.body.style.overflow = 'hidden';
+  const close = () => { m.hidden = true; back.hidden = true; document.body.style.overflow = ''; lastFocus?.focus?.(); removeEventListener('keydown', onKey); };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  addEventListener('keydown', onKey);
+  back.onclick = close;
+  $$('[data-close]', m).forEach(b => b.onclick = close);
+  ($('[data-autofocus]', m) || $('[data-close]', m))?.focus();
+  return close;
+}
+
+async function openStory(id) {
+  openModal(`<header><div><h2 id="modalTitle">Loading story…</h2></div><button class="icon-btn" data-close aria-label="Close">×</button></header><div class="body"><div class="sk"></div><div class="sk"></div><div class="sk" style="width:60%"></div></div>`);
+  let s;
+  try { s = await api(`/api/item/${id}`); } catch (e) { $('#modal .body').innerHTML = `<p>${esc(e.message)}</p>`; return; }
+  const acts = s.meeting?.actions?.actions?.filter(x => x.item) || [];
+  const close = openModal(`<header><div><h2 id="modalTitle">${esc(s.title)}</h2><div class="sub">${esc(s.source)} · ${s.published ? fmtDate(s.published) : 'found ' + ago(s.found)}${s.tags ? ' · ' + esc(s.tags.replace(/,/g, ', ')) : ''}</div></div><button class="icon-btn" data-close aria-label="Close">×</button></header>
+    <div class="body">
+      ${s.summary ? `<p class="lede">${esc(s.summary)}</p>` : ''}
+      ${s.why ? `<div class="whybox"><b>Why it matters:</b> ${esc(s.why)}</div>` : ''}
+      ${acts.length ? `<div><h4>Actions in this document</h4><ul>${acts.map(x => `<li>${esc(x.item)}${x.outcome ? ` · <i>${esc(x.outcome)}</i>` : ''}${x.amount_usd ? ` <span class="amtchip">${esc(x.amount_usd)}</span>` : ''}${x.vote ? ` <span class="amtchip">vote ${esc(x.vote)}</span>` : ''}${x.parties ? ` · ${esc(x.parties)}` : ''}</li>`).join('')}</ul></div>` : ''}
+      ${s.money?.length ? `<div><h4>Money mentioned</h4>${s.money.map(m => `<div class="money-row" style="padding:8px 0"><div><div class="amt">${money(m.amount)}</div><span class="tag k">${esc(m.kind)}</span></div><div><p>${esc(m.label)}</p></div></div>`).join('')}</div>` : ''}
+      ${s.excerpt ? `<div><h4>${s.excerptKind === 'news' ? 'Opening of the article' : 'From the source document'}</h4><div class="excerpt">${esc(s.excerpt)}</div></div>` : ''}
+      ${s.related?.length ? `<div><h4>Related</h4><ul class="rows" style="border:1px solid var(--line);border-radius:8px">${s.related.map(r => `<li><button class="linkbtn" data-related="${r.id}">${esc(r.title)}</button><span class="s">${esc(r.source)} · ${ago(r.found_at)}</span></li>`).join('')}</ul></div>` : ''}
+    </div>
+    <footer><button class="btn" data-listen>▶ Listen</button><span class="muted" style="font-size:12px">Summary is machine-written; the original is the record.</span><a class="btn primary" href="${esc(s.url)}" target="_blank" rel="noopener" data-autofocus>Open full story ↗</a></footer>`);
+  $$('#modal [data-related]').forEach(b => b.onclick = () => { close(); openStory(+b.dataset.related); });
+  $('#modal [data-listen]').onclick = () => { speechSynthesis?.cancel(); speakText(`${s.title}. ${s.summary || ''} ${s.why ? 'Why it matters: ' + s.why : ''}`); };
+}
+
+// ---------------- edit key prompt ----------------
+function askKey() {
+  return new Promise(resolve => {
+    let done = false;
+    const close = openModal(`<header><div><h2 id="modalTitle">Edit key</h2><div class="sub">Viewing is open to everyone. Changing sources or settings needs the owner's edit key.</div></div><button class="icon-btn" data-close aria-label="Close">×</button></header>
+      <form class="body" id="keyForm"><div><label for="ek">Edit key</label><input id="ek" type="password" autocomplete="current-password" required data-autofocus></div><p class="muted" id="kerr" role="alert" style="margin:0"></p>
+      <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn" data-close>Cancel</button><button class="btn primary">Unlock editing</button></div></form>`);
+    const obs = new MutationObserver(() => { if ($('#modal').hidden && !done) { done = true; obs.disconnect(); resolve(false); } });
+    obs.observe($('#modal'), { attributes: true, attributeFilter: ['hidden'] });
+    $('#keyForm').onsubmit = async e => {
+      e.preventDefault();
+      try { await api('/api/login', { method: 'POST', body: { key: $('#ek').value.trim() } }); done = true; obs.disconnect(); close(); toast('Editing unlocked on this device'); resolve(true); }
+      catch (err) { $('#kerr').textContent = err.message; }
+    };
+  });
+}
+
+// ---------------- Listen ----------------
 function speakText(text, { onstart, onend } = {}) {
   if (!('speechSynthesis' in window)) { toast('Your browser cannot read aloud.'); return; }
   const u = new SpeechSynthesisUtterance(text.replace(/\bEDA\b/g, 'E.D.A.').replace(/\bNRHA\b/g, 'N.R.H.A.'));
@@ -244,17 +507,18 @@ function speakText(text, { onstart, onend } = {}) {
   speechSynthesis.speak(u);
 }
 function listen(d, btn) {
-  if (speechSynthesis.speaking) { speechSynthesis.cancel(); btn.classList.remove('speaking-now'); btn.querySelector('.lt').textContent = 'Listen'; app.querySelectorAll('#briefList li').forEach(l => l.classList.remove('speaking')); return; }
+  const clear = () => { btn.classList.remove('speaking-now'); btn.querySelector('.lt').textContent = 'Listen'; $$('#briefList .story').forEach(l => l.classList.remove('speaking')); };
+  if (speechSynthesis.speaking) { speechSynthesis.cancel(); clear(); return; }
   btn.classList.add('speaking-now'); btn.querySelector('.lt').textContent = 'Stop';
   const items = d.brief.bullets;
-  speakText(`Here is your Norfolk economic development brief for ${fmtDate(d.brief.period)}.`);
-  items.forEach((b, i) => speakText(b.text, {
-    onstart: () => { app.querySelectorAll('#briefList li').forEach(l => l.classList.toggle('speaking', +l.dataset.i === i)); },
-    onend: () => { if (i === items.length - 1) { btn.classList.remove('speaking-now'); btn.querySelector('.lt').textContent = 'Listen'; app.querySelectorAll('#briefList li').forEach(l => l.classList.remove('speaking')); } },
+  speakText(`Here is your ${GEO_NAMES[geo]} economic development brief for ${fmtDate(d.brief.period)}.`);
+  items.forEach((b, i) => speakText(`Story ${i + 1}. ${b.text}`, {
+    onstart: () => $$('#briefList .story').forEach(l => l.classList.toggle('speaking', +l.dataset.i === i)),
+    onend: () => { if (i === items.length - 1) clear(); },
   }));
 }
 
-// ---------------- Ask (type or talk) ----------------
+// ---------------- Ask ----------------
 const drawer = $('#askDrawer'), fab = $('#askFab');
 fab.onclick = () => { drawer.hidden = false; fab.hidden = true; $('#askInput').focus(); };
 $('#askClose').onclick = () => { drawer.hidden = true; fab.hidden = false; speechSynthesis?.cancel(); };
@@ -266,11 +530,12 @@ async function ask(q, spoken = false) {
   log.insertAdjacentHTML('beforeend', `<div class="msg me">${esc(q)}</div>`);
   $('#askInput').value = '';
   const pending = document.createElement('div');
-  pending.className = 'msg bot'; pending.textContent = 'Looking through the sources…';
+  pending.className = 'msg bot'; pending.innerHTML = '<span class="typing"><span></span><span></span><span></span></span>';
   log.append(pending); log.scrollTop = log.scrollHeight;
   try {
     const r = await api('/api/ask', { method: 'POST', body: { q } });
-    pending.innerHTML = `${esc(r.answer)}${r.sources.length ? `<div class="srcs">${r.sources.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.source)}: ${esc(s.title.slice(0, 80))} ↗</a>`).join('')}</div>` : ''}`;
+    pending.innerHTML = `${esc(r.answer)}${r.sources.length ? `<div class="srcs">${r.sources.map(s => s.id ? `<button class="linkbtn" data-story="${s.id}" style="text-align:left">${esc(s.source)}: ${esc(s.title.slice(0, 80))}</button>` : `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)} ↗</a>`).join('')}</div>` : ''}`;
+    $$('[data-story]', pending).forEach(b => b.onclick = () => openStory(+b.dataset.story));
     if (spoken) { const orb = $('#askMic'); speakText(r.answer, { onstart: () => orb.classList.add('speaking'), onend: () => orb.classList.remove('speaking') }); }
   } catch (e) { pending.textContent = e.message; }
   log.scrollTop = log.scrollHeight;
@@ -278,7 +543,7 @@ async function ask(q, spoken = false) {
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 $('#askMic').onclick = () => {
   if (!SR) { toast('Voice input works in Chrome, Edge and Safari. You can type instead.'); return; }
-  const rec = new SR(); const orb = $('#askMic');
+  const rec = new SR(), orb = $('#askMic');
   rec.lang = 'en-US'; rec.interimResults = false; rec.maxAlternatives = 1;
   rec.onstart = () => orb.classList.add('listening');
   rec.onend = () => orb.classList.remove('listening');
@@ -287,35 +552,27 @@ $('#askMic').onclick = () => {
   speechSynthesis?.cancel(); rec.start();
 };
 
-// ---------------- Source Manager ----------------
-let sources = [];
-let tierTab = 'all';
+// ---------------- Sources ----------------
+let sources = [], tierTab = 'all';
 async function renderSources() {
-  setStatus('idle', 'Admin');
-  app.innerHTML = `<div class="page-head"><div><h1>Sources</h1><p>Everything EDAScout reads. Add any public page, RSS feed or PDF; pause or remove sources anytime.</p></div>
-    <div class="actions"><button class="btn" id="runNow">Run scan now</button><button class="btn primary" id="addBtn">+ Add source</button></div></div>
+  setStatus('idle', 'Sources');
+  const me = await api('/api/me').catch(() => ({ editor: false }));
+  app.innerHTML = `<div class="page-head"><div><h1>Sources</h1><p>Everything EDAScout reads. Anyone can run a fresh scan; adding, pausing or removing sources asks for the edit key.</p></div>
+    <div class="actions"><button class="btn" id="runNow">Run scan now</button><button class="btn primary" id="addBtn">+ Add source</button>${me.editor ? '<button class="btn" id="logout">Lock editing</button>' : ''}</div></div>
     <div id="runLog"></div>
-    <div class="tabs" role="toolbar">${[['all', 'All'], ['1', 'Tier 1 · Norfolk'], ['2', 'Tier 2 · Region'], ['3', 'Tier 3 · Trends'], ['paused', 'Paused'], ['removed', 'Removed']].map(([k, l]) => `<button class="chip ${k === tierTab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}<input id="q" placeholder="Search sources" aria-label="Search sources"></div>
-    <section class="panel"><div class="panel-body flush" style="overflow:auto"><table class="src-table"><thead><tr><th>Health</th><th>Source</th><th>Tier</th><th>Type</th><th>Cadence</th><th>Last new</th><th>Active</th><th></th></tr></thead><tbody id="srcRows"><tr><td colspan="8"><div class="sk"></div><div class="sk"></div></td></tr></tbody></table></div></section>
-    <section class="panel" style="margin-top:20px"><div class="panel-head"><h2>Settings</h2></div><div class="panel-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-      <button class="toggle" id="pubToggle" aria-pressed="${me.publicView}" aria-label="Public view"></button>
-      <div><b>Public view</b><div class="muted" style="font-size:13px">Off = only you (signed in) can see the dashboard. On = anyone with the link can view; only you can change sources.</div></div>
-      <button class="btn" id="logout" style="margin-left:auto">Sign out on this device</button></div></section>`;
+    <div class="tabs" role="toolbar">${[['all', 'All'], ['norfolk', 'Norfolk'], ['region', 'Hampton Roads'], ['state', 'Virginia'], ['national', 'National'], ['paused', 'Paused'], ['removed', 'Removed']].map(([k, l]) => `<button class="chip ${k === tierTab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}<input id="q" placeholder="Search sources" aria-label="Search sources"></div>
+    <section class="panel"><div class="panel-body flush" style="overflow:auto"><table class="src-table"><thead><tr><th>Health</th><th>Source</th><th>Area</th><th>Type</th><th>Cadence</th><th>Last new</th><th>Active</th><th></th></tr></thead><tbody id="srcRows"><tr><td colspan="8"><div class="sk"></div><div class="sk"></div></td></tr></tbody></table></div></section>`;
   $('#addBtn').onclick = () => openDrawer();
   $('#runNow').onclick = runNow;
   $('#q').oninput = drawRows;
-  app.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tierTab = b.dataset.tab; app.querySelectorAll('[data-tab]').forEach(x => x.classList.toggle('on', x === b)); drawRows(); });
-  $('#pubToggle').onclick = async e => {
-    const on = e.currentTarget.getAttribute('aria-pressed') !== 'true';
-    await api('/api/settings', { method: 'PATCH', body: { publicView: on } });
-    e.currentTarget.setAttribute('aria-pressed', on); me.publicView = on; toast(on ? 'Dashboard is now viewable by link' : 'Dashboard is private');
-  };
-  $('#logout').onclick = async () => { await api('/api/logout', { method: 'POST' }); location.hash = '#/'; router(); };
+  if ($('#logout')) $('#logout').onclick = async () => { await api('/api/logout', { method: 'POST' }); toast('Editing locked'); renderSources(); };
+  $$('[data-tab]').forEach(b => b.onclick = () => { tierTab = b.dataset.tab; $$('[data-tab]').forEach(x => x.classList.toggle('on', x === b)); drawRows(); });
   sources = await api('/api/sources');
   drawRows();
 }
 
 function health(s) {
+  if (s.kind === 'reference') return ['g', 'Linked reference (not fetched)'];
   if (s.deleted_at || !s.active) return ['n', 'Paused'];
   if (!s.last_fetched) return ['n', 'Not scanned yet'];
   if (s.fail_count >= 3) return ['r', s.last_error || 'Failing'];
@@ -329,21 +586,21 @@ function drawRows() {
     if (tierTab === 'removed') return !!s.deleted_at;
     if (s.deleted_at) return false;
     if (tierTab === 'paused') return !s.active;
-    if (tierTab !== 'all' && String(s.tier) !== tierTab) return false;
+    if (tierTab !== 'all' && s.geo !== tierTab) return false;
     return true;
   }).filter(s => !q || `${s.name} ${s.url} ${s.tags}`.toLowerCase().includes(q));
   $('#srcRows').innerHTML = list.length ? list.map(s => {
     const [h, ht] = health(s);
     return `<tr data-id="${s.id}" class="${s.deleted_at ? 'deleted' : ''}">
-      <td><span class="health ${h}" title="${esc(ht)}"></span><span class="muted" style="font-size:12px">${esc(h === 'g' ? 'OK' : h === 'n' ? '—' : 'Check')}</span></td>
-      <td><b>${esc(s.name)}</b> ${s.origin === 'recommended' ? '<span class="tag rule">recommended</span>' : s.origin === 'added' ? '<span class="tag">added</span>' : ''}<a class="u" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a>${s.fail_count ? `<span class="u" style="color:var(--nfk-alert)">${esc(s.last_error || '')}</span>` : ''}</td>
-      <td>${s.tier}</td><td>${esc(s.kind)}</td><td>${esc(s.cadence)}</td>
+      <td><span class="health ${h}" title="${esc(ht)}"></span><span class="muted" style="font-size:12px">${esc(h === 'g' ? (s.kind === 'reference' ? 'Link' : 'OK') : h === 'n' ? '—' : 'Check')}</span></td>
+      <td><b>${esc(s.name)}</b> ${s.origin === 'recommended' ? '<span class="tag rule">recommended</span>' : s.origin === 'added' ? '<span class="tag">added</span>' : ''}<a class="u" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a>${s.fail_count && s.kind !== 'reference' ? `<span class="u" style="color:var(--nfk-alert)">${esc(s.last_error || '')}</span>` : ''}</td>
+      <td>${esc({ norfolk: 'Norfolk', region: 'Hampton Roads', state: 'Virginia', national: 'National' }[s.geo] || s.geo)}</td><td>${esc(s.kind)}</td><td>${esc(s.cadence)}</td>
       <td class="muted">${s.last_new ? ago(s.last_new) : '—'}<br><span style="font-size:12px">${s.item_count} items</span></td>
       <td>${s.deleted_at ? '' : `<button class="toggle" data-act="toggle" aria-pressed="${!!s.active}" aria-label="Active"></button>`}</td>
       <td><div class="row-actions">${s.deleted_at ? '<button class="mini" data-act="restore">Restore</button>' : '<button class="mini" data-act="test">Test now</button><button class="mini" data-act="edit">Edit</button><button class="mini" data-act="remove">Remove</button>'}</div></td>
     </tr>`;
   }).join('') : '<tr><td colspan="8" class="empty">No sources here.</td></tr>';
-  app.querySelectorAll('#srcRows [data-act]').forEach(b => b.onclick = () => rowAction(b));
+  $$('#srcRows [data-act]').forEach(b => b.onclick = () => rowAction(b));
 }
 
 async function rowAction(b) {
@@ -351,78 +608,77 @@ async function rowAction(b) {
   try {
     if (act === 'toggle') {
       const on = b.getAttribute('aria-pressed') !== 'true';
-      await api(`/api/sources/${id}`, { method: 'PATCH', body: { active: on } });
+      await edit(() => api(`/api/sources/${id}`, { method: 'PATCH', body: { active: on } }));
       s.active = on ? 1 : 0; b.setAttribute('aria-pressed', on); toast(on ? `${s.name} resumed` : `${s.name} paused`);
     } else if (act === 'remove') {
-      await api(`/api/sources/${id}`, { method: 'DELETE' });
+      await edit(() => api(`/api/sources/${id}`, { method: 'DELETE' }));
       tr.classList.add('removing');
       s.deleted_at = new Date().toISOString(); s.active = 0;
       setTimeout(drawRows, 250);
       toast(`Removed ${s.name}`, { label: 'Undo', run: async () => { await api(`/api/sources/${id}/restore`, { method: 'POST' }); s.deleted_at = null; s.active = 1; drawRows(); } });
     } else if (act === 'restore') {
-      await api(`/api/sources/${id}/restore`, { method: 'POST' }); s.deleted_at = null; s.active = 1; drawRows(); toast(`Restored ${s.name}`);
+      await edit(() => api(`/api/sources/${id}/restore`, { method: 'POST' })); s.deleted_at = null; s.active = 1; drawRows(); toast(`Restored ${s.name}`);
     } else if (act === 'test') {
       b.disabled = true; b.textContent = 'Testing…';
-      const r = await api(`/api/sources/${id}/test`, { method: 'POST' });
-      b.disabled = false; b.textContent = 'Test now';
-      openDrawer(s, r);
-    } else if (act === 'edit') openDrawer(s);
-  } catch (e) { toast(e.message); }
+      try { const r = await edit(() => api(`/api/sources/${id}/test`, { method: 'POST' })); openDrawer(s, r); }
+      finally { b.disabled = false; b.textContent = 'Test now'; }
+    } else if (act === 'edit') { await edit(() => api('/api/models')); openDrawer(s); }
+  } catch (e) { if (e.message !== 'Edit cancelled') toast(e.message); }
 }
 
 function openDrawer(src = null, testResult = null) {
-  const edit = !!src;
+  const isEdit = !!src;
   const back = document.createElement('div'); back.className = 'drawer-back';
-  const el = document.createElement('aside'); el.className = 'drawer'; el.setAttribute('aria-label', edit ? 'Edit source' : 'Add source');
-  el.innerHTML = `<header><h2>${edit ? 'Edit source' : 'Add a source'}</h2><button class="icon-btn" data-close aria-label="Close">×</button></header>
+  const el = document.createElement('aside'); el.className = 'drawer'; el.setAttribute('aria-label', isEdit ? 'Edit source' : 'Add source');
+  const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${String(cur) === String(v) ? 'selected' : ''}>${l}</option>`).join('');
+  el.innerHTML = `<header><h2>${isEdit ? 'Edit source' : 'Add a source'}</h2><button class="icon-btn" data-close aria-label="Close">×</button></header>
     <div class="body">
-      ${edit ? `<div><label>Web address</label><a href="${esc(src.url)}" target="_blank" rel="noopener">${esc(src.url)}</a></div>`
+      ${isEdit ? `<div><label>Web address</label><a href="${esc(src.url)}" target="_blank" rel="noopener">${esc(src.url)}</a></div>`
         : `<div><label for="f-url">Web address (page, RSS feed or PDF)</label><div style="display:flex;gap:8px"><input id="f-url" type="url" placeholder="https://…" required><button class="btn" id="f-prev" type="button">Preview</button></div></div>`}
       <div id="f-preview">${testResult ? previewHtml(testResult) : ''}</div>
       <div><label for="f-name">Name</label><input id="f-name" value="${esc(src?.name || '')}" placeholder="e.g. Hampton Roads Alliance news"></div>
       <div class="two">
-        <div><label for="f-tier">Tier</label><select id="f-tier">${[[1, '1 · Norfolk core'], [2, '2 · Regional context'], [3, '3 · Trends']].map(([v, l]) => `<option value="${v}" ${(src?.tier || 1) == v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-        <div><label for="f-cad">How often</label><select id="f-cad">${['daily', 'weekly', 'monthly'].map(v => `<option ${(src?.cadence || 'daily') === v ? 'selected' : ''}>${v}</option>`).join('')}</select></div>
+        <div><label for="f-geo">Area</label><select id="f-geo">${opt([['norfolk', 'Norfolk'], ['region', 'Hampton Roads'], ['state', 'Virginia'], ['national', 'National']], src?.geo || 'norfolk')}</select></div>
+        <div><label for="f-cad">How often</label><select id="f-cad">${opt([['daily', 'daily'], ['weekly', 'weekly'], ['monthly', 'monthly']], src?.cadence || 'daily')}</select></div>
       </div>
       <div class="two">
-        <div><label for="f-kind">What it is</label><select id="f-kind">${[['news', 'News / announcements'], ['meetings', 'Meeting agendas & minutes'], ['cityhall', 'City Hall meetings list'], ['properties', 'Properties / listings'], ['grants', 'Grants / funding'], ['context', 'Plan or report (context)']].map(([v, l]) => `<option value="${v}" ${(src?.kind || 'news') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
-        <div><label for="f-tags">Tags</label><input id="f-tags" value="${esc(src?.tags || '')}" placeholder="Maritime, Downtown"></div>
+        <div><label for="f-kind">What it is</label><select id="f-kind">${opt([['news', 'News / announcements'], ['meetings', 'Meeting agendas & minutes'], ['cityhall', 'City Hall meetings list'], ['properties', 'Properties / listings'], ['grants', 'Grants / funding'], ['context', 'Plan or report (context)'], ['reference', 'Link only (never fetched)']], src?.kind || 'news')}</select></div>
+        <div><label for="f-tier">Priority</label><select id="f-tier">${opt([[1, 'High'], [2, 'Normal'], [3, 'Background']], src?.tier || 1)}</select></div>
       </div>
+      <div><label for="f-tags">Tags</label><input id="f-tags" value="${esc(src?.tags || '')}" placeholder="Maritime, Downtown"></div>
       <div><label for="f-kw">Only keep items mentioning (optional)</label><input id="f-kw" value="${esc(src?.keyword_filter || '')}" placeholder="Norfolk, Hampton Roads"></div>
     </div>
-    <footer><button class="btn" data-close>Cancel</button><button class="btn primary" id="f-save">${edit ? 'Save changes' : 'Add source'}</button></footer>`;
+    <footer><button class="btn" data-close>Cancel</button><button class="btn primary" id="f-save">${isEdit ? 'Save changes' : 'Add source'}</button></footer>`;
   document.body.append(back, el);
   const close = () => { back.remove(); el.remove(); };
-  back.onclick = close; el.querySelectorAll('[data-close]').forEach(b => b.onclick = close);
-  addEventListener('keydown', function k(e) { if (e.key === 'Escape') { close(); removeEventListener('keydown', k); } });
-  (edit ? $('#f-name', el) : $('#f-url', el)).focus();
-
-  if (!edit) $('#f-prev', el).onclick = async () => {
+  back.onclick = close; $$('[data-close]', el).forEach(b => b.onclick = close);
+  (isEdit ? $('#f-name', el) : $('#f-url', el)).focus();
+  if (!isEdit) $('#f-prev', el).onclick = async () => {
     const box = $('#f-preview', el), btn = $('#f-prev', el);
     btn.disabled = true; btn.textContent = 'Reading…';
     box.innerHTML = '<div class="sk"></div><div class="sk"></div><div class="sk"></div>';
     try {
-      const r = await api('/api/sources/preview', { method: 'POST', body: { url: $('#f-url', el).value, kind: $('#f-kind', el).value, keyword_filter: $('#f-kw', el).value } });
+      const r = await edit(() => api('/api/sources/preview', { method: 'POST', body: { url: $('#f-url', el).value, kind: $('#f-kind', el).value, keyword_filter: $('#f-kw', el).value } }));
       box.innerHTML = previewHtml(r);
       if (!$('#f-name', el).value) $('#f-name', el).value = new URL(r.url).hostname.replace(/^www\./, '');
     } catch (e) { box.innerHTML = `<p style="color:var(--nfk-alert)">${esc(e.message)}</p>`; }
     btn.disabled = false; btn.textContent = 'Preview';
   };
   $('#f-save', el).onclick = async () => {
-    const body = { name: $('#f-name', el).value, tier: +$('#f-tier', el).value, cadence: $('#f-cad', el).value, kind: $('#f-kind', el).value, tags: $('#f-tags', el).value, keyword_filter: $('#f-kw', el).value };
+    const body = { name: $('#f-name', el).value, tier: +$('#f-tier', el).value, geo: $('#f-geo', el).value, cadence: $('#f-cad', el).value, kind: $('#f-kind', el).value, tags: $('#f-tags', el).value, keyword_filter: $('#f-kw', el).value };
     try {
-      if (edit) await api(`/api/sources/${src.id}`, { method: 'PATCH', body });
-      else await api('/api/sources', { method: 'POST', body: { ...body, url: $('#f-url', el).value } });
-      close(); toast(edit ? 'Saved' : 'Source added. It will be read on the next scan.');
+      if (isEdit) await edit(() => api(`/api/sources/${src.id}`, { method: 'PATCH', body }));
+      else await edit(() => api('/api/sources', { method: 'POST', body: { ...body, url: $('#f-url', el).value } }));
+      close(); toast(isEdit ? 'Saved' : 'Source added. It will be read on the next scan.');
       sources = await api('/api/sources'); drawRows();
-    } catch (e) { toast(e.message); }
+    } catch (e) { if (e.message !== 'Edit cancelled') toast(e.message); }
   };
 }
 
 function previewHtml(r) {
   if (r.ok === false) return `<p style="color:var(--nfk-alert)">Couldn't read it: ${esc(r.error)}</p>`;
   const c = r.candidates || [];
-  return `<div class="preview"><div class="panel-head" style="background:transparent"><h2 style="font-size:13px">What EDAScout sees (${esc(r.method)})</h2><span class="meta">${c.length ? 'latest items' : ''}</span></div>
+  return `<div class="preview"><div class="panel-head" style="background:transparent"><h2 style="font-size:13px">What EDAScout sees (${esc(r.method)})</h2></div>
     ${c.length ? `<ul class="rows">${c.map(x => `<li><a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>${x.published ? `<span class="s">${fmtDate(x.published)}</span>` : ''}</li>`).join('')}</ul>` : '<p class="empty" style="padding:12px">No item links found. Try "Plan or report" as the type, or a more specific page.</p>'}</div>`;
 }
 
@@ -435,7 +691,8 @@ async function runNow() {
   const line = h => { rl.insertAdjacentHTML('beforeend', h + '<br>'); rl.scrollTop = rl.scrollHeight; };
   try {
     const res = await fetch('/api/run', { method: 'POST', credentials: 'same-origin' });
-    const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+    if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || `HTTP ${res.status}`); }
+    const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -445,22 +702,25 @@ async function runNow() {
         const ev = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
         if (ev.type === 'start') line(`Reading ${ev.sources} sources…`);
         if (ev.type === 'source') line(ev.ok ? `<span class="ok">✓</span> ${esc(ev.name)}${ev.newItems ? ` · ${ev.newItems} new` : ''}` : `<span class="bad">✗</span> ${esc(ev.name)} · ${esc(ev.error)}`);
-        if (ev.type === 'phase') line(ev.phase === 'brief' ? 'Writing today\'s brief…' : 'Summarizing new items…');
-        if (ev.type === 'done') { line(`<span class="ok">Done.</span> ${ev.newItems} new items, ${ev.sourcesOk} sources OK, ${ev.sourcesFailed} failed, ${ev.llmCalls} AI calls.`); setStatus('', 'Scan finished just now'); }
+        if (ev.type === 'data') line(ev.error ? `<span class="bad">✗</span> ${esc(ev.name)} · ${esc(ev.error)}` : `<span class="ok">✓</span> ${esc(ev.name)}${ev.skipped ? ' · up to date' : ev.ok != null ? ` · ${ev.ok} loaded` : ''}${ev.failed?.length ? ` · ${ev.failed.length} unavailable` : ''}`);
+        if (ev.type === 'phase') line({ trends: 'Updating trend and federal data…', summarizing: 'Summarizing new items…', brief: "Writing today's brief…" }[ev.phase] || ev.phase);
+        if (ev.type === 'done') { line(`<span class="ok">Done.</span> ${ev.newItems} new items, ${ev.sourcesOk} sources OK, ${ev.sourcesFailed} failed, ${ev.llmCalls} AI calls.`); setStatus('', 'Updated just now'); }
         if (ev.type === 'error') line(`<span class="bad">Error:</span> ${esc(ev.error)}`);
       }
     }
-  } catch (e) { line(`<span class="bad">${esc(e.message)}</span>`); }
+  } catch (e) { line(`<span class="bad">${esc(e.message)}</span>`); setStatus('idle', 'Sources'); }
   btn.disabled = false; btn.textContent = 'Run scan now';
-  dash = null;
+  dash = null; trendData = null;
   sources = await api('/api/sources'); drawRows();
 }
 
 // ---------------- Models ----------------
 async function renderModels() {
-  setStatus('idle', 'Admin');
+  setStatus('idle', 'Models');
   app.innerHTML = '<div class="sk"></div>';
-  const d = await api('/api/models');
+  let d;
+  try { d = await edit(() => api('/api/models')); }
+  catch (e) { app.innerHTML = `<div class="page-head"><div><h1>Models</h1><p>${e.message === 'Edit cancelled' ? 'The Models page needs the edit key.' : esc(e.message)}</p></div></div>`; return; }
   const label = { summarize: 'Summarize items', extract: 'Read meeting PDFs', synthesize: 'Write the brief', voice: 'Answer questions (Ask)' };
   app.innerHTML = `<div class="page-head"><div><h1>Models</h1><p>No job is tied to one AI company. Each job tries the cheapest model first and moves to the next only if the answer fails a check. Workers AI needs no key.</p></div></div>
     <p class="muted" style="margin:-6px 0 16px">Keys connected: ${d.keysConnected.length ? d.keysConnected.map(k => `<span class="tag">${esc(k)}</span>`).join(' ') : '<b>none</b>, so everything runs on Cloudflare Workers AI (included in your plan)'}. Add GEMINI_API_KEY, OPENAI_API_KEY, XAI_API_KEY, GROQ_API_KEY or ANTHROPIC_API_KEY as Worker secrets to unlock those options.</p>
@@ -470,20 +730,20 @@ async function renderModels() {
       <div class="panel-body" style="display:grid;gap:10px">
         <label>Model chain, cheapest first (one per line: <code>workers-ai @cf/…</code> or <code>https://base-url model-name KEY_NAME</code>)</label>
         <textarea rows="4" style="font-family:var(--mono);font-size:12.5px">${esc(r.chain.map(s => s.provider === 'workers-ai' ? `workers-ai ${s.model}` : `${s.base_url || 'AI_BASE_URL'} ${s.model}${s.key ? ' ' + s.key : ''}`).join('\n'))}</textarea>
-        <div class="two" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label>Max reply tokens</label><input type="number" data-f="max_tokens" value="${r.max_tokens}"></div><div><label>Max calls per day</label><input type="number" data-f="daily_cap_calls" value="${r.daily_cap_calls}"></div></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div><label>Max reply tokens</label><input type="number" data-f="max_tokens" value="${r.max_tokens}"></div><div><label>Max calls per day</label><input type="number" data-f="daily_cap_calls" value="${r.daily_cap_calls}"></div></div>
         ${use.length ? `<ul class="rows" style="border:1px solid var(--line);border-radius:8px">${use.map(u => `<li><b>${esc(u.model)}</b><span class="s">${u.calls} calls · ${Math.round((u.ok / u.calls) * 100)}% ok · ${u.avg_ms} ms avg · ${u.tin + u.tout} tokens</span></li>`).join('')}</ul>` : '<p class="muted" style="margin:0">No calls yet.</p>'}
         <div><button class="btn primary" data-save>Save</button></div>
       </div></section>`;
     }).join('')}</div>`;
-  app.querySelectorAll('[data-save]').forEach(b => b.onclick = async () => {
+  $$('[data-save]').forEach(b => b.onclick = async () => {
     const sec = b.closest('[data-task]');
     const chain = sec.querySelector('textarea').value.split('\n').map(l => l.trim().split(/\s+/)).filter(p => p[0]).map(p => p[0] === 'workers-ai'
       ? { provider: 'workers-ai', model: p[1] }
       : { provider: 'openai-compat', base_url: p[0] === 'AI_BASE_URL' ? undefined : p[0], model: p[1], key: p[2] });
     try {
-      await api(`/api/models/${sec.dataset.task}`, { method: 'PUT', body: { chain, max_tokens: +sec.querySelector('[data-f=max_tokens]').value, daily_cap_calls: +sec.querySelector('[data-f=daily_cap_calls]').value } });
+      await edit(() => api(`/api/models/${sec.dataset.task}`, { method: 'PUT', body: { chain, max_tokens: +sec.querySelector('[data-f=max_tokens]').value, daily_cap_calls: +sec.querySelector('[data-f=daily_cap_calls]').value } }));
       toast('Saved');
-    } catch (e) { toast(e.message); }
+    } catch (e) { if (e.message !== 'Edit cancelled') toast(e.message); }
   });
 }
 

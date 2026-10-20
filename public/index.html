@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>EDAScout · Norfolk economic development</title>
-  <meta name="description" content="A daily, source-linked command view of Norfolk economic development: EDA meetings, City Hall, deals, properties and regional signals.">
+  <meta name="description" content="A daily, source-linked command view of Norfolk economic development: EDA meetings, City Hall, deals, housing, money and regional trends.">
   <meta name="theme-color" content="#225081">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23225081'/%3E%3Cpath d='M6 20c4-4 8 4 12 0s6-4 8-2' stroke='%2390BA39' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='22' cy='10' r='3' fill='%23fff'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/app.css?v=2">
 </head>
 <body>
   <header class="topbar">
@@ -24,36 +24,46 @@
         <span class="mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M5 20c4-4 8 4 12 0s6-4 9-2" stroke="#90BA39" stroke-width="3" fill="none" stroke-linecap="round"/><circle cx="22" cy="10" r="3" fill="#fff"/></svg></span>
         <span class="brand-text"><b>EDAScout</b><small>Norfolk economic development</small></span>
       </a>
+      <div class="scope" role="radiogroup" aria-label="Geography">
+        <span class="scope-pill" aria-hidden="true"></span>
+        <button role="radio" data-geo="norfolk" aria-checked="true">Norfolk</button>
+        <button role="radio" data-geo="region" aria-checked="false">Hampton Roads</button>
+        <button role="radio" data-geo="state" aria-checked="false">Virginia</button>
+      </div>
       <nav class="nav" aria-label="Main">
         <a href="#/" data-nav="home">Dashboard</a>
-        <a href="#/admin" data-nav="admin" class="owner-only">Sources</a>
-        <a href="#/models" data-nav="models" class="owner-only">Models</a>
+        <a href="#/sources" data-nav="sources">Sources</a>
+        <a href="#/models" data-nav="models">Models</a>
       </nav>
-      <div class="run-status" id="runStatus" aria-live="polite"><span class="dot"></span><span class="txt">Loading…</span></div>
+      <div class="run-status" id="runStatus" aria-live="polite"><span class="dot idle"></span><span class="txt">Loading…</span></div>
     </div>
+    <div class="ticker" aria-label="Latest headlines"><div class="ticker-track" id="ticker"></div></div>
   </header>
 
   <main id="app" tabindex="-1"></main>
 
-  <button class="ask-fab" id="askFab" aria-label="Ask EDAScout" hidden>
+  <button class="ask-fab" id="askFab" aria-label="Ask EDAScout">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-2.1a7 7 0 0 0 6-6.9h-2Z"/></svg>
     <span>Ask</span>
   </button>
   <aside class="ask-drawer" id="askDrawer" aria-label="Ask EDAScout" hidden>
     <div class="ask-head"><b>Ask EDAScout</b><button class="icon-btn" id="askClose" aria-label="Close">×</button></div>
-    <div class="ask-log" id="askLog"><p class="muted">Ask a simple question, like "What did the EDA approve last meeting?" Answers come only from the sources EDAScout tracks, with links.</p></div>
+    <div class="ask-log" id="askLog"><p class="muted">Ask a simple question, like "What did the EDA approve last meeting?" or "How are home prices in Norfolk?" Answers come only from the sources EDAScout tracks, with links.</p></div>
     <form class="ask-form" id="askForm">
       <button type="button" class="orb" id="askMic" aria-label="Speak your question"><span></span></button>
-      <input id="askInput" autocomplete="off" placeholder="Type or tap the mic…" maxlength="300">
+      <input id="askInput" autocomplete="off" placeholder="Type or tap the mic…" maxlength="300" aria-label="Your question">
       <button class="btn primary" type="submit">Ask</button>
     </form>
   </aside>
 
+  <div class="modal-back" id="modalBack" hidden></div>
+  <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden></div>
+
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
   <footer class="foot">
-    <p>Independent project. Not affiliated with the City of Norfolk or the Norfolk Economic Development Authority. Summaries are machine-written from public sources. Always check the linked original.</p>
+    <p>Independent project. Not affiliated with the City of Norfolk or the Norfolk Economic Development Authority. Summaries are machine-written from public sources; always check the linked original. Trend data: Federal Reserve Economic Data (FRED). Federal awards: USAspending.gov.</p>
   </footer>
-  <script src="/app.js" type="module"></script>
+  <script src="/app.js?v=2" type="module"></script>
 </body>
 </html>

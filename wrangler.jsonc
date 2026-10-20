@@ -21,6 +21,8 @@
   ],
   "kv_namespaces": [{ "binding": "KV", "id": "46681e25a2ae4c229060ec6ece06812d" }],
   "ai": { "binding": "AI" },
+  // Cloudflare Browser Run: only used as a fallback when a site refuses a plain request (403/429/5xx).
+  "browser": { "binding": "BROWSER" },
   // Daily run 10:00 UTC (6:00 AM EDT / 5:00 AM EST). Weekly roll-up is written on Mondays after the daily run.
   "triggers": { "crons": ["0 10 * * *"] },
   "limits": { "cpu_ms": 300000 },
@@ -30,5 +32,5 @@
     "MAX_LLM_CALLS_PER_RUN": "40",
     "MAX_ITEMS_PER_SOURCE": "8"
   }
-  // Optional secrets (any subset, never committed): ADMIN_KEY, OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, GROQ_API_KEY, ANTHROPIC_API_KEY
+  // Optional secrets (any subset, never committed): OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, GROQ_API_KEY, ANTHROPIC_API_KEY
 }

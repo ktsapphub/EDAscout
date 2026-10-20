@@ -1,6 +1,6 @@
 // Small helpers: safe URLs, polite fetching, HTML/RSS parsing, hashing.
 
-export const UA = 'EDAScoutBot/1.0 (+https://edascout.ktsapps.com/about; civic news monitor)';
+export const UA = 'Mozilla/5.0 (compatible; EDAScout/1.0; +https://edascout.ktsapps.com) civic news monitor';
 
 const PRIVATE_HOST = /^(localhost|.*\.local|.*\.internal|.*\.lan|metadata\.google\.internal)$/i;
 const PRIVATE_IP = /^(10\.|127\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$|\[?f[cd][0-9a-f]{2}:|\[?fe80:)/i;
@@ -69,7 +69,7 @@ function parseRobots(txt) {
 
 /** Fetch with polite headers, timeout, size cap and conditional-GET support. */
 export async function politeFetch(url, { etag, lastModified, accept, maxBytes = 6_000_000 } = {}) {
-  const headers = { 'User-Agent': UA, Accept: accept || 'text/html,application/xhtml+xml,application/rss+xml,application/xml;q=0.9,*/*;q=0.8' };
+  const headers = { 'User-Agent': UA, Accept: accept || 'text/html,application/xhtml+xml,application/rss+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'en-US,en;q=0.9' };
   if (etag) headers['If-None-Match'] = etag;
   if (lastModified) headers['If-Modified-Since'] = lastModified;
   const res = await fetch(url, { headers, redirect: 'follow', signal: AbortSignal.timeout(20000) });
@@ -81,6 +81,41 @@ export async function politeFetch(url, { etag, lastModified, accept, maxBytes = 
   const isBinary = /pdf|octet-stream/i.test(type) || /\.pdf($|\?)/i.test(res.url);
   const body = isBinary ? await res.arrayBuffer() : await res.text();
   return { status: res.status, type, body, isBinary, finalUrl: res.url, etag: res.headers.get('etag'), lastModified: res.headers.get('last-modified') };
+}
+
+const RETRYABLE = /HTTP (403|406|409|429|5\d\d)|internal error|timed? ?out|network/i;
+
+/**
+ * Fetch that survives bot walls: polite fetch → one retry on 429/5xx → Cloudflare Browser Run (real headless browser).
+ * robots.txt is checked by the caller first, so this never reads a page a site asked crawlers to avoid.
+ */
+export async function robustFetch(env, url, opts = {}) {
+  try {
+    return await politeFetch(url, opts);
+  } catch (e) {
+    const msg = String(e.message || e);
+    if (!RETRYABLE.test(msg)) throw e;
+    if (/HTTP (429|5\d\d)/.test(msg)) {
+      await new Promise(r => setTimeout(r, 2500));
+      try { return await politeFetch(url, opts); } catch { /* fall through to browser */ }
+    }
+    if (!env?.BROWSER?.quickAction || /\.pdf($|\?)/i.test(url)) throw e;
+    const html = await browserHtml(env, url);
+    if (!html) throw e;
+    return { status: 200, type: 'text/html', body: html, isBinary: false, finalUrl: url, viaBrowser: true };
+  }
+}
+
+async function browserHtml(env, url) {
+  try {
+    const out = await env.BROWSER.quickAction('content', { url, gotoOptions: { waitUntil: 'domcontentloaded', timeout: 30000 } });
+    if (typeof out === 'string') return out;
+    if (out instanceof Response) {
+      const t = await out.text();
+      try { const j = JSON.parse(t); return typeof j.result === 'string' ? j.result : null; } catch { return t; }
+    }
+    return typeof out?.result === 'string' ? out.result : null;
+  } catch { return null; }
 }
 
 const ENT = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', ndash: '–', mdash: '—', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“', hellip: '…' };
