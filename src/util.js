@@ -99,10 +99,44 @@ export async function robustFetch(env, url, opts = {}) {
       await new Promise(r => setTimeout(r, 2500));
       try { return await politeFetch(url, opts); } catch { /* fall through to browser */ }
     }
-    if (!env?.BROWSER?.quickAction || /\.pdf($|\?)/i.test(url)) throw e;
+    if (/\.pdf($|\?)/i.test(url)) {
+      const buf = await browserBinary(env, url).catch(() => null);
+      if (!buf) throw e;
+      return { status: 200, type: 'application/pdf', body: buf, isBinary: true, finalUrl: url, viaBrowser: true };
+    }
+    if (!env?.BROWSER?.quickAction) throw e;
     const html = await browserHtml(env, url);
     if (!html) throw e;
     return { status: 200, type: 'text/html', body: html, isBinary: false, finalUrl: url, viaBrowser: true };
+  }
+}
+
+/**
+ * Download a file (e.g. an agenda PDF) through a real browser session: open the site's home page first
+ * (so any bot check is passed the normal way), then fetch the file from inside that page.
+ */
+async function browserBinary(env, url) {
+  if (!env?.BROWSER) return null;
+  const { default: puppeteer } = await import('@cloudflare/puppeteer');
+  const browser = await puppeteer.launch(env.BROWSER);
+  try {
+    const page = await browser.newPage();
+    await page.setExtraHTTPHeaders({ 'Accept-Language': 'en-US,en;q=0.9' });
+    await page.goto(new URL(url).origin + '/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const b64 = await page.evaluate(async u => {
+      const r = await fetch(u, { credentials: 'include' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      if (bytes.length > 15_000_000) throw new Error('Too large');
+      let s = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+      return btoa(s);
+    }, url);
+    const bin = atob(b64), out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out.buffer;
+  } finally {
+    await browser.close().catch(() => {});
   }
 }
 

@@ -258,9 +258,12 @@ export async function summarizeNew(env, ctx) {
   }
 }
 
+// Brief material: dated, recent news and meeting documents only (evergreen website pages are not news).
 async function topSignals(env, sinceSql, limit) {
   const { results } = await env.DB.prepare(`SELECT i.id, i.title, i.summary, i.url, i.score, i.type, s.name AS source FROM signals g JOIN items i ON i.id = g.item_id JOIN sources s ON s.id = i.source_id
-     WHERE g.status != 'dismissed' AND g.created_at >= ${sinceSql} ORDER BY i.score DESC LIMIT ?`).bind(limit).all();
+     WHERE g.status != 'dismissed' AND g.created_at >= ${sinceSql} AND i.type != 'context'
+       AND (i.type = 'meeting' OR (i.published_at IS NOT NULL AND i.published_at >= datetime('now','-21 days')))
+     ORDER BY i.type = 'meeting' DESC, i.score DESC LIMIT ?`).bind(limit).all();
   return results;
 }
 
@@ -268,7 +271,7 @@ export async function writeDailyBrief(env, ctx) {
   let sig = await topSignals(env, "datetime('now', '-30 hours')", 10);
   if (!sig.length) {
     const { results } = await env.DB.prepare(`SELECT i.id, i.title, i.summary, i.url, i.score, i.type, s.name AS source FROM items i JOIN sources s ON s.id = i.source_id
-       WHERE i.type != 'context' AND i.found_at >= datetime('now', '-3 days') ORDER BY i.score DESC LIMIT 6`).all();
+       WHERE i.type != 'context' AND (i.type = 'meeting' OR i.published_at >= datetime('now', '-14 days')) ORDER BY i.published_at DESC, i.score DESC LIMIT 6`).all();
     sig = results;
   }
   if (!sig.length) return null;
@@ -291,7 +294,7 @@ async function writeWeekly(env, ctx) {
 async function synthesize(env, ctx, sig, kind) {
   const ids = new Set(sig.map(s => s.id));
   const out = await chat(env, 'synthesize', [
-    { role: 'system', content: 'You write a neutral morning briefing on Norfolk, Virginia economic development for a civic leader. Use only the items given. Every bullet must cite the item ids it is based on. Never invent facts or numbers. Plain words, under 35 words per bullet.' },
+    { role: 'system', content: 'You write a neutral morning briefing on Norfolk, Virginia economic development for a civic leader. Use only the items given. Every bullet must cite the item ids it is based on. Never invent facts or numbers. Skip items that are general descriptions or marketing pages rather than news. Each summary must say what happened, who, and any amount or date given. Plain words, under 35 words per bullet.' },
     { role: 'user', content: `Write the ${kind === 'weekly' ? 'weekly roll-up: group into themes, most important first' : 'daily brief: one entry per story, most important first. Each entry is a plain 1-2 sentence summary of that story and why it matters'}. Return JSON {"bullets":[{"text":"...","items":[ids]}]} with at most ${kind === 'weekly' ? 6 : 6} entries. Do not repeat the same story twice.\n\nITEMS:\n${JSON.stringify(sig.map(s => ({ id: s.id, source: s.source, title: s.title, summary: s.summary || '' })))}` },
   ], { json: true, budget: ctx.budget });
   const bullets = (out?.data?.bullets || [])
