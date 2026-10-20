@@ -137,61 +137,41 @@ function drawDashboard(d) {
   const g = GEO_NAMES[geo], B = buildBrief(d, trendData?.metrics || []);
   const eda = edaZone(d);
 
-  app.innerHTML = `
-  <section class="zone reveal" id="today"><div class="divider"><span>Today · ${g}</span></div>
-    <div class="grid">
-      <div class="span-12 kpis">${kpiRow(d, B)}</div>
-      ${briefPanel(d, B)}
-    </div>
-  </section>
-
-  ${geo === 'norfolk' ? eda : ''}
-
-  <section class="zone reveal" id="trends"><div class="divider"><span>Trends · ${g}</span><small>Source: FRED · change vs. a year earlier</small></div>
-    ${trendsBlock()}
-  </section>
-
-  <section class="zone reveal" id="signals"><div class="divider"><span>Signals · ${g}</span><small>Scored 0–100 for relevance to Norfolk economic development</small></div>
-    <div class="grid">
+  const sections = {
+    today: { title: `Today · ${g}`, body: `<div class="grid"><div class="span-12 kpis">${kpiRow(d, B)}</div>${briefPanel(d, B)}</div>` },
+    eda: { title: 'EDA Board Meetings', small: 'Norfolk Economic Development Authority · agendas &amp; minutes', body: eda },
+    trends: { title: `Trends · ${g}`, small: 'Source: FRED · tap a card for the full chart', body: trendsBlock() },
+    signals: { title: `Signals · ${g}`, small: 'Scored 0–100 for relevance to Norfolk economic development', body: `<div class="grid">
       <section class="panel span-12 ${d.signals.some(s => isFresh(s.found_at)) ? 'has-new' : ''}">
         <div class="panel-head"><h2>${ico('radar')}Signal Board</h2><span class="meta">${d.signals.length} active · ${g}</span></div>
+        ${scoreHistogram(d.signals)}
         <div class="filters" role="toolbar" aria-label="Filter signals">${['All', ...new Set(d.signals.flatMap(s => (s.tags || '').split(',').filter(Boolean)))].slice(0, 9).map(t => `<button class="chip ${t === filter ? 'on' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>
         <div class="panel-body flush scroll"><div class="cards two" id="signalCards">${signalCards(d.signals)}</div></div>
-      </section>
-    </div>
-  </section>
-
-  <section class="zone reveal" id="money"><div class="divider"><span>Money &amp; Housing · ${g}</span><small>Dollar figures found in sources · federal awards in Norfolk</small></div>
-    <div class="grid">${moneyPanel(d)}${awardsPanel(d)}</div>
-  </section>
-
-  ${geo !== 'norfolk' ? eda : ''}
-
-  <section class="zone reveal" id="cityhall"><div class="divider"><span>City Hall &amp; Latest</span></div>
-    <div class="grid">
+      </section></div>` },
+    money: { title: `Money &amp; Housing · ${g}`, small: 'Dollar figures found in sources · federal awards in Norfolk', body: `<div class="grid">${moneyPanel(d)}${awardsPanel(d)}</div>` },
+    cityhall: { title: 'City Hall &amp; Latest', body: `<div class="grid">
       <section class="panel span-6"><div class="panel-head"><h2>${ico('hall')}Norfolk City Hall</h2><span class="meta">Council, Planning &amp; boards</span></div>
         <div class="panel-body flush">${d.cityhall.length ? `<ul class="rows">${d.cityhall.map(r => `<li><button class="linkbtn" data-story="${r.id}">${esc(r.title)}</button><span class="s">${esc(r.summary || '')}${r.summary ? ' · ' : ''}found ${ago(r.found_at)}</span></li>`).join('')}</ul>` : '<p class="empty" style="padding:16px">No City Hall items in the latest update.</p>'}</div></section>
       <section class="panel span-6"><div class="panel-head"><h2>${ico('feed')}Latest from all sources</h2><span class="meta">${g} · newest first</span></div>
         <div class="panel-body flush scroll" style="max-height:520px">${d.latest.length ? `<ul class="rows">${d.latest.map(r => `<li><button class="linkbtn" data-story="${r.id}">${esc(r.title)}</button><span class="s"><span class="src"><img src="${favicon(r.url)}" alt="" loading="lazy"> ${esc(r.source)}</span> · ${ago(r.found_at)}</span></li>`).join('')}</ul>` : '<p class="empty" style="padding:16px">Nothing yet.</p>'}</div></section>
-    </div>
-  </section>
-
-  <section class="zone reveal" id="topics"><div class="divider"><span>What's heating up</span><small>Items per topic, last 8 weeks</small></div>
-    <div class="grid">
+    </div>` },
+    topics: { title: "What's heating up", small: 'Items per topic, last 8 weeks', body: `<div class="grid">
       <section class="panel span-5"><div class="panel-head"><h2>${ico('trend')}Topic momentum</h2><span class="meta">green = this week</span></div>
         <div class="panel-body flush">${topicsList(d.topics)}</div></section>
       <section class="panel span-7"><div class="panel-head"><h2>${ico('book')}Plans &amp; research library</h2><span class="meta">context, not news</span></div>
         <div class="lib">${d.library.map(r => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title.slice(0, 90))}<span>${esc(r.source)}</span></a>`).join('') || '<p class="empty">Loads after the first update.</p>'}</div></section>
-    </div>
-  </section>
-
-  ${d.weekly ? `<section class="zone reveal"><div class="divider"><span>Weekly Roll-up · ${esc(d.weekly.period)}</span></div><div class="grid"><section class="panel span-12"><div class="panel-body"><div class="stories">${d.weekly.bullets.map((b, i) => storyCard(b, i, d)).join('')}</div></div></section></div></section>` : ''}`;
-
+    </div>` },
+  };
+  if (d.weekly) sections.weekly = { title: `Weekly Roll-up · ${esc(d.weekly.period)}`, body: `<div class="grid"><section class="panel span-12"><div class="panel-body"><div class="stories">${d.weekly.bullets.map((b, i) => storyCard(b, i, d)).join('')}</div></div></section></div>` };
+  const L = layout(), order = [...L.order.filter(k => sections[k]), ...Object.keys(sections).filter(k => !L.order.includes(k))];
+  const visible = order.filter(k => !L.hidden.includes(k));
+  app.innerHTML = visible.map((k, i) => zone(k, sections[k], L.collapsed.includes(k), i, visible.length)).join('')
+    + `<div class="layout-bar">${L.hidden.filter(k => sections[k]).length ? `<span>Hidden:</span>${L.hidden.filter(k => sections[k]).map(k => `<button class="chip" data-unhide="${k}">+ ${sections[k].title.replace(/ · .*/, '')}</button>`).join('')}` : '<span class="muted">Use the controls on each section bar to move, collapse or hide it.</span>'}<button class="linkbtn" id="resetLayout">Reset layout</button></div>`;
   $$('[data-count]').forEach(el => countUp(el, +el.dataset.count));
   $$('[data-money]').forEach(el => countUp(el, +el.dataset.money, money));
   requestAnimationFrame(() => $$('.kpi [data-w]').forEach(el => (el.style.width = el.dataset.w + '%')));
   wireDashboard(d, B);
-  drawTrendChart();
+  wireLayout();
   reveal();
 }
 
@@ -329,8 +309,7 @@ function edaZone(d) {
   const nextEda = d.kpis.nextEda, dt = nextEda ? toDate(nextEda) : null;
   const days = dt ? Math.max(0, Math.ceil((dt - Date.now()) / 864e5)) : null;
   const groups = meetingGroups(d);
-  return `<section class="zone reveal" id="eda"><div class="divider"><span>EDA Board Meetings</span><small>Norfolk Economic Development Authority · agendas &amp; minutes</small></div>
-    <div class="grid">
+  return `<div class="grid">
       <section class="panel span-4 next-card">
         <div class="panel-head"><h2>${ico('cal')}Next meeting</h2></div>
         <div class="panel-body">
@@ -355,8 +334,94 @@ function edaZone(d) {
             </div>
           </article>`; }).join('')}</div>` : '<p class="empty">Agendas and minutes appear after the next update reads the EDA site.</p>'}</div>
       </section>
-    </div>
+    </div>`;
+}
+
+
+// ---------------- layout: move, collapse, hide (remembered on this device) ----------------
+const DEFAULT_ORDER = ['today', 'eda', 'trends', 'signals', 'money', 'cityhall', 'topics', 'weekly'];
+function layout() {
+  let L = null;
+  try { L = JSON.parse(store.get('layout:' + geo) || 'null'); } catch {}
+  const base = geo === 'norfolk' ? DEFAULT_ORDER : ['today', 'trends', 'signals', 'money', 'eda', 'cityhall', 'topics', 'weekly'];
+  return { order: L?.order?.length ? L.order : base, hidden: L?.hidden || [], collapsed: L?.collapsed || [] };
+}
+const saveLayout = L => store.set('layout:' + geo, JSON.stringify(L));
+function zone(k, sec, collapsed, i, n) {
+  const ctl = (act, label, icon, dis) => `<button class="zc" data-zone="${k}" data-zact="${act}" aria-label="${label}" title="${label}"${dis ? ' disabled' : ''}><svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg></button>`;
+  return `<section class="zone reveal ${collapsed ? 'collapsed' : ''}" id="${k}">
+    <div class="divider"><span>${sec.title}</span>${sec.small ? `<small>${sec.small}</small>` : ''}
+      <div class="zctl">${ctl('up', 'Move section up', '<path d="M6 15l6-6 6 6"/>', i === 0)}${ctl('down', 'Move section down', '<path d="M6 9l6 6 6-6"/>', i === n - 1)}${ctl('collapse', collapsed ? 'Expand section' : 'Collapse section', collapsed ? '<path d="M4 12h16M12 4v16"/>' : '<path d="M4 12h16"/>')}${ctl('hide', 'Hide section', '<path d="M6 6l12 12M18 6L6 18"/>')}</div></div>
+    <div class="zone-body" ${collapsed ? 'hidden' : ''}>${sec.body}</div>
   </section>`;
+}
+function wireLayout() {
+  $$('[data-zact]').forEach(b => b.onclick = () => {
+    const k = b.dataset.zone, act = b.dataset.zact, L = layout();
+    const vis = [...L.order.filter(x => $('#' + x) || x === k)];
+    if (!L.order.includes(k)) L.order.push(k);
+    const domOrder = $$('#app > .zone').map(z => z.id);
+    L.order = [...domOrder, ...L.order.filter(x => !domOrder.includes(x))];
+    const i = L.order.indexOf(k);
+    if (act === 'up' || act === 'down') {
+      const vi = domOrder.indexOf(k), other = domOrder[vi + (act === 'up' ? -1 : 1)];
+      if (!other) return;
+      const j = L.order.indexOf(other); [L.order[i], L.order[j]] = [L.order[j], L.order[i]];
+      saveLayout(L);
+      const el = $('#' + k), oel = $('#' + other);
+      swap(() => { act === 'up' ? oel.before(el) : oel.after(el); refreshZoneButtons(); });
+      el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'nearest' });
+    } else if (act === 'collapse') {
+      const on = !L.collapsed.includes(k);
+      L.collapsed = on ? [...L.collapsed, k] : L.collapsed.filter(x => x !== k);
+      saveLayout(L);
+      const z = $('#' + k); z.classList.toggle('collapsed', on); $('.zone-body', z).hidden = on;
+      b.setAttribute('aria-label', on ? 'Expand section' : 'Collapse section'); b.title = b.getAttribute('aria-label');
+      b.querySelector('svg').innerHTML = on ? '<path d="M4 12h16M12 4v16"/>' : '<path d="M4 12h16"/>';
+      if (!on && k === 'trends') drawTrendCards();
+    } else if (act === 'hide') {
+      L.hidden = [...new Set([...L.hidden, k])]; saveLayout(L);
+      const z = $('#' + k); z.style.transition = 'opacity .25s, transform .25s'; z.style.opacity = 0; z.style.transform = 'scale(.98)';
+      setTimeout(() => drawDashboard(dash), 250);
+      toast('Section hidden', { label: 'Undo', run: () => { const M = layout(); M.hidden = M.hidden.filter(x => x !== k); saveLayout(M); drawDashboard(dash); } });
+    }
+  });
+  $$('[data-unhide]').forEach(b => b.onclick = () => { const L = layout(); L.hidden = L.hidden.filter(x => x !== b.dataset.unhide); saveLayout(L); drawDashboard(dash); $('#' + b.dataset.unhide)?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth' }); });
+  $('#resetLayout').onclick = () => { try { localStorage.removeItem('layout:' + geo); } catch {} drawDashboard(dash); toast('Layout reset'); };
+}
+function refreshZoneButtons() {
+  const zs = $$('#app > .zone');
+  zs.forEach((z, i) => { $('[data-zact="up"]', z).disabled = i === 0; $('[data-zact="down"]', z).disabled = i === zs.length - 1; });
+}
+const drawTrendCards = () => {};
+
+// ---------------- charts: palette checked with the dataviz validator (CVD + contrast pass) ----------------
+const CAT = ['#2F6DB0', '#C97A1E', '#9361C2', '#6E9A2A'];
+
+/** Score distribution (histogram) with the 85 bar marked. */
+function scoreHistogram(list) {
+  if (!list.length) return '';
+  const bins = Array.from({ length: 10 }, (_, i) => ({ lo: i * 10, n: 0 }));
+  list.forEach(s => bins[Math.min(9, Math.floor(s.score / 10))].n++);
+  const max = Math.max(1, ...bins.map(b => b.n)), W = innerWidth < 640 ? 340 : 600, H = 92, P = { l: 8, r: 8, t: 10, b: 20 }, bw = (W - P.l - P.r) / 10;
+  const X = v => P.l + v / 100 * (W - P.l - P.r), Y = n => P.t + (1 - n / max) * (H - P.t - P.b);
+  return `<div class="histo"><div class="histo-k"><b>Score distribution</b><span>${list.filter(s => s.score >= 85).length} at 85+ · ${list.length} total</span></div>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Signal scores: ${bins.filter(b => b.n).map(b => `${b.n} between ${b.lo} and ${b.lo + 9}`).join(', ')}">
+    ${bins.map((b, i) => b.n ? `<rect class="hb ${b.lo >= 80 ? 'hi' : ''}" x="${P.l + i * bw + 1}" y="${Y(b.n)}" width="${bw - 2}" height="${H - P.b - Y(b.n)}" rx="4" style="--i:${i}"><title>${b.lo}–${b.lo + 9}: ${b.n} signal${b.n > 1 ? 's' : ''}</title></rect><text x="${P.l + i * bw + bw / 2}" y="${Y(b.n) - 3}" text-anchor="middle" class="hv">${b.n}</text>` : '').join('')}
+    <line class="thr" x1="${X(85)}" x2="${X(85)}" y1="${P.t - 6}" y2="${H - P.b}"/><text class="thr-t" x="${X(85) + 4}" y="${P.t + 2}">85</text>
+    ${[0, 20, 40, 60, 80, 100].map(v => `<text class="ax" x="${X(v)}" y="${H - 5}" text-anchor="middle">${v}</text>`).join('')}</svg></div>`;
+}
+
+/** Donut for parts of a whole (≤4 slices; the rest folds into "Other"). Legend + direct labels, never color alone. */
+function donut(rows, { label = 'Total', fmt = money } = {}) {
+  let r = [...rows].sort((a, b) => b.value - a.value);
+  if (r.length > 4) r = [...r.slice(0, 3), { name: 'Other', value: r.slice(3).reduce((a, x) => a + x.value, 0) }];
+  const tot = r.reduce((a, x) => a + x.value, 0);
+  if (!tot) return '';
+  const R = 52, C = 2 * Math.PI * R; let off = 0;
+  const arcs = r.map((x, i) => { const len = x.value / tot * C; const seg = `<circle r="${R}" cx="70" cy="70" fill="none" stroke="${CAT[i]}" stroke-width="20" stroke-dasharray="${Math.max(0, len - 2)} ${C}" stroke-dashoffset="${-off}" transform="rotate(-90 70 70)" class="arc" style="--i:${i}"><title>${esc(x.name)}: ${fmt(x.value)} (${Math.round(x.value / tot * 100)}%)</title></circle>`; off += len; return seg; }).join('');
+  return `<div class="donut"><svg viewBox="0 0 140 140" role="img" aria-label="${r.map(x => `${x.name} ${fmt(x.value)}`).join(', ')}">${arcs}<text x="70" y="66" text-anchor="middle" class="dv">${fmt(tot)}</text><text x="70" y="84" text-anchor="middle" class="dl">${esc(label)}</text></svg>
+    <ul class="legend">${r.map((x, i) => `<li><i style="background:${CAT[i]}"></i>${esc(x.name)}<b>${fmt(x.value)}</b><span>${Math.round(x.value / tot * 100)}%</span></li>`).join('')}</ul></div>`;
 }
 
 // ---------------- refresh clock ----------------
@@ -374,7 +439,7 @@ function startRefreshClock(d) {
       return;
     }
     const h = Math.floor(ms / 3600e3), m = Math.floor(ms % 3600e3 / 60e3), s = Math.floor(ms % 60e3 / 1000);
-    el.textContent = `Next update in ${h ? h + 'h ' : ''}${String(m).padStart(h ? 2 : 1, '0')}m ${String(s).padStart(2, '0')}s`;
+    el.innerHTML = `<span class="pre">Next update in </span>${h ? h + 'h ' : ''}${String(m).padStart(h ? 2 : 1, '0')}m <span class="sec">${String(s).padStart(2, '0')}s</span>`;
   };
   tick(); refreshTimer = setInterval(tick, 1000);
 }
@@ -478,7 +543,7 @@ function moneyPanel(d) {
   const totals = (d.money.totals || []).slice(0, 4);
   const items = d.money.items || [];
   return `<section class="panel span-7"><div class="panel-head"><h2>${ico('coin')}Money tracker</h2><span class="meta">${GEO_NAMES[geo]} · last 90 days</span></div>
-    ${totals.length ? `<div class="money-totals">${totals.map(t => `<div class="mt"><div class="n" data-money="${t.total}">$0</div><div class="l">${esc(t.kind)} · ${t.n} mention${t.n > 1 ? 's' : ''}</div></div>`).join('')}</div>` : ''}
+    ${totals.length ? `<div class="panel-body" style="padding-bottom:0">${donut((d.money.totals || []).map(t => ({ name: t.kind, value: t.total })), { label: '90-day total' })}</div>` : ''}
     <div class="panel-body flush scroll" style="max-height:460px">${items.length ? items.map(m => `<div class="money-row">
       <div><div class="amt">${money(m.amount)}</div><span class="tag k">${esc(m.kind)}</span></div>
       <div><p>${esc(m.label)}</p><div class="s"><button class="linkbtn" data-story="${m.id}">${esc(m.title.slice(0, 90))}</button> · ${esc(m.source)}</div></div>
@@ -502,25 +567,23 @@ function topicsList(t) {
 // ---------------- trends ----------------
 function trendsBlock() {
   const ms = trendData?.metrics || [];
-  if (!ms.length) return `<section class="panel"><div class="panel-body"><p class="empty">Trend data for ${GEO_NAMES[geo]} loads with the next scan (weekly from the Federal Reserve's FRED database).</p></div></section>`;
+  if (!ms.length) return `<section class="panel"><div class="panel-body"><p class="empty">Trend data for ${GEO_NAMES[geo]} loads with the next update (from the Federal Reserve's FRED database).</p></div></section>`;
   const groups = ['All', ...new Set(ms.map(m => m.group))];
   const shown = ms.filter(m => trendGroup === 'All' || m.group === trendGroup);
-  if (!trendKey || !ms.some(m => m.key === trendKey)) trendKey = shown[0]?.key;
-  return `<div class="trend-head"><div class="groups" role="toolbar" aria-label="Trend groups">${groups.map(g => `<button class="chip ${g === trendGroup ? 'on' : ''}" data-group="${g}">${g}</button>`).join('')}</div></div>
-    <div class="metrics" id="metricCards">${shown.map(m => metricCard(m)).join('')}</div>
-    <section class="panel" style="margin-top:16px"><div class="panel-head"><h2 id="chartTitle">${ico('trend')}</h2><span class="meta" id="chartMeta"></span></div>
-      <div class="panel-body"><div class="chart-wrap" id="chartWrap"></div><details class="tbl"><summary>Show as a table</summary><div id="chartTable"></div></details></div></section>`;
+  return `<div class="trend-head"><div class="groups" role="toolbar" aria-label="Trend groups">${groups.map(g => `<button class="chip ${g === trendGroup ? 'on' : ''}" data-group="${g}">${g}</button>`).join('')}</div><span class="muted" style="font-size:12.5px">Tap any card for the full chart</span></div>
+    <div class="metrics" id="metricCards">${shown.map(m => metricCard(m)).join('')}</div>`;
 }
 
 function metricCard(m) {
   const good = m.better === 'neutral' || m.change == null ? 'flat' : (m.change > 0) === (m.better === 'up') ? 'good' : 'bad';
   const arrow = m.change == null ? '' : m.change > 0 ? '▲' : m.change < 0 ? '▼' : '•';
   const chg = m.pct == null ? '' : m.unit === '%' ? `${arrow} ${Math.abs(m.change).toFixed(1)} pts` : `${arrow} ${Math.abs(m.pct).toFixed(1)}%`;
-  return `<button class="metric ${m.key === trendKey ? 'on' : ''}" data-key="${m.key}" aria-pressed="${m.key === trendKey}">
+  return `<button class="metric" data-key="${m.key}" aria-haspopup="dialog" aria-label="${esc(m.label)}: open the full chart">
     <span class="k">${esc(m.label)}</span>
     <span class="v" data-val="${m.latest.v}" data-unit="${m.unit}">${fmtVal(m.latest.v, m.unit)}</span>
     <span class="d">${chg ? `<span class="chg ${good}">${chg}</span>` : ''}<span class="muted">${fmtDate(m.latest.d)}</span></span>
     ${spark(m.points)}
+    <span class="open-hint">Full chart ↗</span>
   </button>`;
 }
 
@@ -544,57 +607,109 @@ function niceTicks(lo, hi, n = 4) {
   return out;
 }
 
-function drawTrendChart() {
-  const wrap = $('#chartWrap');
-  const m = trendData?.metrics?.find(x => x.key === trendKey);
-  if (!wrap || !m) return;
-  $('#chartTitle').innerHTML = `${ico('trend')}${esc(m.label)} · ${GEO_NAMES[geo]}`;
-  $('#chartMeta').innerHTML = `<a href="${esc(m.source)}" target="_blank" rel="noopener">FRED ${esc(m.series)} ↗</a>`;
-  const pts = m.points, W = Math.max(320, wrap.clientWidth), H = 280, P = { l: 64, r: 18, t: 16, b: 30 };
-  const vs = pts.map(p => p.v), ticks = niceTicks(Math.min(...vs), Math.max(...vs));
+// Chart type follows the data: counts → bars, prices and totals → area, rates and indexes → line.
+const CHART_FOR = { unemp: 'line', jobs: 'bar', list_price: 'area', listings: 'bar', dom: 'line', permits: 'bar', hpi: 'line', income: 'area', gdp: 'area' };
+const RANGES = [['7D', 7], ['30D', 30], ['90D', 90], ['YTD', 'ytd'], ['1Y', 365], ['5Y', 1830]];
+function cadenceOf(pts) {
+  if (pts.length < 3) return 'occasionally';
+  const gaps = pts.slice(1).map((p, i) => (toDate(p.d) - toDate(pts[i].d)) / 864e5).sort((a, b) => a - b);
+  const g = gaps[Math.floor(gaps.length / 2)];
+  return g < 10 ? 'weekly' : g < 40 ? 'monthly' : g < 120 ? 'quarterly' : 'yearly';
+}
+function inRange(pts, r) {
+  const now = Date.now();
+  const from = r === 'ytd' ? Date.UTC(new Date().getUTCFullYear(), 0, 1) : now - r * 864e5;
+  return pts.filter(p => toDate(p.d) >= from);
+}
+
+function openMetric(key, range = '1Y', type = null) {
+  const m = trendData?.metrics?.find(x => x.key === key);
+  if (!m) return;
+  type ||= CHART_FOR[m.key] || 'line';
+  const cad = cadenceOf(m.points);
+  const close = openModal(`<header><div><h2 id="modalTitle">${esc(m.label)} · ${GEO_NAMES[geo]}</h2><div class="sub">Published ${cad} · latest ${fmtDate(m.latest.d)} · <a href="${esc(m.source)}" target="_blank" rel="noopener">FRED ${esc(m.series)} ↗</a></div></div><button class="icon-btn" data-close aria-label="Close">×</button></header>
+    <div class="body chart-modal">
+      <div class="cm-bar"><div class="seg" role="toolbar" aria-label="Time range">${RANGES.map(([l, v]) => `<button data-range="${l}" class="${l === range ? 'on' : ''}">${l}</button>`).join('')}</div>
+        <div class="seg" role="toolbar" aria-label="Chart type">${['line', 'area', 'bar'].map(t => `<button data-type="${t}" class="${t === type ? 'on' : ''}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div></div>
+      <div class="cm-stats" id="cmStats"></div>
+      <p class="note" id="cmNote" hidden></p>
+      <div class="chart-wrap" id="cmChart"></div>
+      <details class="tbl"><summary>Show as a table</summary><div id="cmTable"></div></details>
+    </div>
+    <footer><button class="btn" data-listen>▶ Listen</button><span class="muted" style="font-size:12px">Federal Reserve Bank of St. Louis (FRED) data.</span><button class="btn primary" data-close data-autofocus>Done</button></footer>`);
+  const draw = () => {
+    const rv = RANGES.find(r => r[0] === range)[1];
+    let pts = inRange(m.points, rv), note = '';
+    if (pts.length < 2) {
+      pts = m.points.slice(-2);
+      note = `No new ${m.label.toLowerCase()} readings in the last ${range === 'YTD' ? 'part of this year' : range.replace('D', ' days')}. This series is published ${cad} (latest: ${fmtDate(m.latest.d)}), so the two most recent readings are shown.`;
+    }
+    const first = pts[0], last = pts[pts.length - 1], vs = pts.map(p => p.v);
+    const diff = last.v - first.v, pct = first.v ? diff / Math.abs(first.v) * 100 : 0;
+    const chg = m.unit === '%' ? `${diff >= 0 ? '+' : ''}${diff.toFixed(1)} pts` : `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+    $('#cmStats').innerHTML = [['Latest', fmtVal(last.v, m.unit)], [`Change (${fmtDate(first.d)} → ${fmtDate(last.d)})`, chg], ['High', fmtVal(Math.max(...vs), m.unit)], ['Low', fmtVal(Math.min(...vs), m.unit)]]
+      .map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+    $('#cmNote').hidden = !note; $('#cmNote').textContent = note;
+    drawChart($('#cmChart'), m, pts, pts.length <= 3 ? 'bar' : type);
+    $('#cmTable').innerHTML = `<table class="trend-table"><thead><tr><th>Date</th><th>${esc(m.label)}</th></tr></thead><tbody>${[...pts].reverse().map(p => `<tr><td>${fmtDate(p.d)}</td><td class="n">${fmtVal(p.v, m.unit)}</td></tr>`).join('')}</tbody></table>`;
+  };
+  $$('#modal [data-range]').forEach(b => b.onclick = () => { range = b.dataset.range; $$('#modal [data-range]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
+  $$('#modal [data-type]').forEach(b => b.onclick = () => { type = b.dataset.type; $$('#modal [data-type]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
+  $('#modal [data-listen]').onclick = () => { speechSynthesis?.cancel(); speakText(`${m.label} in ${GEO_NAMES[geo]} is ${fmtVal(m.latest.v, m.unit)} as of ${fmtDate(m.latest.d)}${chgWords(m) ? ', ' + chgWords(m) : ''}.`); };
+  requestAnimationFrame(draw);
+  return close;
+}
+
+/** One chart renderer for line, area and bar; hover tooltip on every type. */
+function drawChart(wrap, m, pts, type) {
+  wrap.classList.remove('drawn');
+  const W = Math.max(300, wrap.clientWidth), H = 280, P = { l: 64, r: 16, t: 16, b: 30 };
+  const vs = pts.map(p => p.v);
+  const ticks = niceTicks(type === 'bar' ? Math.min(0, ...vs) : Math.min(...vs), Math.max(...vs));
   const lo = ticks[0], hi = ticks[ticks.length - 1];
-  const t0 = toDate(pts[0].d) - 0, t1 = toDate(pts[pts.length - 1].d) - 0;
-  const X = d => P.l + ((toDate(d) - t0) / ((t1 - t0) || 1)) * (W - P.l - P.r);
+  const n = pts.length, bw = (W - P.l - P.r) / n;
+  const t0 = toDate(pts[0].d) - 0, t1 = toDate(pts[n - 1].d) - 0;
+  const X = type === 'bar' ? (p, i) => P.l + bw * i + bw / 2 : p => P.l + ((toDate(p.d) - t0) / ((t1 - t0) || 1)) * (W - P.l - P.r);
   const Y = v => P.t + (1 - (v - lo) / ((hi - lo) || 1)) * (H - P.t - P.b);
-  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p.d).toFixed(1)},${Y(p.v).toFixed(1)}`).join('');
-  const years = [...new Set(pts.map(p => p.d.slice(0, 4)))];
-  const ystep = Math.ceil(years.length / Math.max(2, Math.floor(W / 90)));
-  wrap.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(m.label)} in ${GEO_NAMES[geo]}, ${fmtVal(m.latest.v, m.unit)} as of ${fmtDate(m.latest.d)}">
-    <defs><linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#225081" stop-opacity=".16"/><stop offset="1" stop-color="#225081" stop-opacity="0"/></linearGradient></defs>
+  const xs = pts.map((p, i) => X(p, i));
+  const line = pts.map((p, i) => `${i ? 'L' : 'M'}${xs[i].toFixed(1)},${Y(p.v).toFixed(1)}`).join('');
+  const spanDays = (t1 - t0) / 864e5;
+  const lab = d => spanDays > 800 ? d.slice(0, 4) : toDate(d).toLocaleDateString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' });
+  const every = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(W / 80))));
+  const marks = type === 'bar'
+    ? pts.map((p, i) => { const y = Y(p.v), y0 = Y(Math.max(lo, 0)), w = Math.max(2, Math.min(42, bw - 2)); return `<rect class="bar" x="${(xs[i] - w / 2).toFixed(1)}" y="${Math.min(y, y0).toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1, Math.abs(y0 - y)).toFixed(1)}" rx="${Math.min(4, w / 2)}" style="--i:${i}"/>`; }).join('')
+    : `${type === 'area' ? `<path class="area" d="${line}L${xs[n - 1]},${H - P.b}L${xs[0]},${H - P.b}Z"/>` : ''}<path class="line draw" d="${line}" pathLength="1"/>`;
+  wrap.innerHTML = `<svg class="chart ${type}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(m.label)}, ${fmtVal(pts[n - 1].v, m.unit)} as of ${fmtDate(pts[n - 1].d)}">
+    <defs><linearGradient id="chartFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#225081" stop-opacity=".22"/><stop offset="1" stop-color="#225081" stop-opacity="0"/></linearGradient></defs>
     <g class="grid">${ticks.map(t => `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(t)}" y2="${Y(t)}"/>`).join('')}</g>
     <g class="axis">${ticks.map(t => `<text x="${P.l - 8}" y="${Y(t) + 4}" text-anchor="end">${fmtVal(t, m.unit)}</text>`).join('')}
-      ${years.filter((_, i) => i % ystep === 0).map(y => `<text x="${X(y + '-01-01')}" y="${H - 8}" text-anchor="middle">${y}</text>`).join('')}</g>
-    <path class="area" d="${line}L${X(pts[pts.length - 1].d)},${H - P.b}L${X(pts[0].d)},${H - P.b}Z" opacity="0"><animate attributeName="opacity" from="0" to="1" dur=".8s" begin=".4s" fill="freeze"/></path>
-    <path class="line draw" d="${line}" pathLength="1" style="--len:1"/>
+      ${(() => { let prev = ''; return pts.map((p, i) => { const t = lab(p.d); if ((i % every && i !== n - 1) || t === prev) return ''; prev = t; return `<text x="${xs[i]}" y="${H - 8}" text-anchor="middle">${t}</text>`; }).join(''); })()}</g>
+    ${marks}
     <line class="cross" y1="${P.t}" y2="${H - P.b}" opacity="0"/>
-    <circle class="hot" r="5" cx="${X(pts[pts.length - 1].d)}" cy="${Y(pts[pts.length - 1].v)}"/>
+    <circle class="hot" r="5" cx="${xs[n - 1]}" cy="${Y(pts[n - 1].v)}" ${type === 'bar' ? 'opacity="0"' : ''}/>
     <rect x="${P.l}" y="${P.t}" width="${W - P.l - P.r}" height="${H - P.t - P.b}" fill="transparent" class="hit"/>
   </svg><div class="tip" style="opacity:0"></div>`;
   requestAnimationFrame(() => wrap.classList.add('drawn'));
   const svg = $('svg', wrap), tip = $('.tip', wrap), cross = $('.cross', svg), hot = $('.hot', svg);
-  const move = e => {
+  $('.hit', svg).addEventListener('pointermove', e => {
     const r = svg.getBoundingClientRect(), x = (e.clientX - r.left) * (W / r.width);
-    let best = pts[0];
-    for (const p of pts) if (Math.abs(X(p.d) - x) < Math.abs(X(best.d) - x)) best = p;
-    const cx = X(best.d), cy = Y(best.v);
+    let bi = 0; xs.forEach((v, i) => { if (Math.abs(v - x) < Math.abs(xs[bi] - x)) bi = i; });
+    const p = pts[bi], cx = xs[bi], cy = Y(p.v);
     cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('opacity', 1);
-    hot.setAttribute('cx', cx); hot.setAttribute('cy', cy);
+    if (type !== 'bar') { hot.setAttribute('cx', cx); hot.setAttribute('cy', cy); }
+    $$('.bar', svg).forEach((b, i) => b.classList.toggle('on', i === bi));
     tip.style.opacity = 1; tip.style.left = `${cx / W * 100}%`; tip.style.top = `${cy / H * 100}%`;
-    tip.innerHTML = `${fmtDate(best.d)} · <b>${fmtVal(best.v, m.unit)}</b>`;
-  };
-  $('.hit', svg).addEventListener('pointermove', move);
-  $('.hit', svg).addEventListener('pointerleave', () => { tip.style.opacity = 0; cross.setAttribute('opacity', 0); });
-  $('#chartTable').innerHTML = `<table class="trend-table"><thead><tr><th>Date</th><th>${esc(m.label)}</th></tr></thead><tbody>${[...pts].reverse().slice(0, 24).map(p => `<tr><td>${fmtDate(p.d)}</td><td class="n">${fmtVal(p.v, m.unit)}</td></tr>`).join('')}</tbody></table>`;
+    tip.innerHTML = `${fmtDate(p.d)} · <b>${fmtVal(p.v, m.unit)}</b>`;
+  });
+  $('.hit', svg).addEventListener('pointerleave', () => { tip.style.opacity = 0; cross.setAttribute('opacity', 0); $$('.bar', svg).forEach(b => b.classList.remove('on')); });
 }
 
 function wireTrends() {
-  $$('[data-group]').forEach(b => b.onclick = () => { trendGroup = b.dataset.group; trendKey = null; swap(() => { $('#trends').innerHTML = `<div class="divider"><span>Trends · ${GEO_NAMES[geo]}</span><small>Source: FRED · change vs. a year earlier</small></div>${trendsBlock()}`; $('#trends').classList.add('in'); wireTrends(); drawTrendChart(); }); });
-  $$('.metric').forEach(b => b.onclick = () => {
-    trendKey = b.dataset.key;
-    $$('.metric').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', x === b); });
-    drawTrendChart();
-    if (innerWidth < 720) $('#chartWrap').scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'center' });
+  $$('[data-group]').forEach(b => b.onclick = () => {
+    trendGroup = b.dataset.group;
+    swap(() => { $('#trends .zone-body').innerHTML = trendsBlock(); wireTrends(); });
   });
+  $$('.metric').forEach(b => b.onclick = () => openMetric(b.dataset.key));
 }
 
 function wireDashboard(d, B) {
