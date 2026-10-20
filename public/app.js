@@ -211,6 +211,7 @@ function countdown(d) {
   return days <= 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
 }
 
+const noIds = t => String(t || '').replace(/\s*\[(?:\d+\s*,?\s*)+\]/g, '');
 const val = v => v != null && v !== '' && String(v).toLowerCase() !== 'null';
 function storySummary(it, fallback) {
   const s = (it?.summary || '').trim();
@@ -292,9 +293,9 @@ function outlookPanel(d) {
   return `<section class="panel span-12 outlook"><div class="panel-head"><h2>${ico('radar')}EDA Outlook</h2><span class="meta">from ${o.docs?.length || 0} EDA documents · updated ${ago(o.created)}</span></div>
     <div class="panel-body"><div class="ol-grid">
       <div class="ol-col"><h4>Last meeting${lm.date ? ` · ${fmtDate(lm.date)}` : ''}</h4><p>${esc(lm.summary || '')}</p>
-        ${lm.decisions?.length ? `<ul class="ol-list">${lm.decisions.map(x => `<li><span class="ol-dot done"></span><div>${esc(x.text)}<div class="s">${refs(x.ids)}</div></div></li>`).join('')}</ul>` : ''}</div>
+        ${lm.decisions?.length ? `<ul class="ol-list">${lm.decisions.map(x => `<li><span class="ol-dot done"></span><div>${esc(noIds(x.text))}<div class="s">${refs(x.ids)}</div></div></li>`).join('')}</ul>` : ''}</div>
       <div class="ol-col"><h4>In motion</h4>${o.initiatives?.length ? `<ul class="ol-list">${o.initiatives.map(x => `<li><span class="ol-dot live"></span><div><b>${esc(x.name)}</b> ${esc(x.status || '')}<div class="s">${refs(x.ids)}</div></div></li>`).join('')}</ul>` : '<p class="muted">No ongoing initiatives found in recent documents.</p>'}</div>
-      <div class="ol-col"><h4>Likely next <span class="tag rule">inferred</span></h4>${o.upcoming?.length ? `<ul class="ol-list">${o.upcoming.map(x => `<li><span class="ol-dot ${x.confidence}"></span><div><b>${esc(x.topic)}</b> <span class="tag ${x.confidence === 'likely' ? 'rule' : 'geo'}">${esc(x.confidence)}</span><div>${esc(x.why || '')}</div><div class="s">${refs(x.ids)}</div></div></li>`).join('')}</ul>` : '<p class="muted">No forward-looking items found yet.</p>'}
+      <div class="ol-col"><h4>Likely next <span class="tag rule">inferred</span></h4>${o.upcoming?.length ? `<ul class="ol-list">${o.upcoming.map(x => `<li><span class="ol-dot ${x.confidence}"></span><div><b>${esc(x.topic)}</b> <span class="tag ${x.confidence === 'likely' ? 'rule' : 'geo'}">${esc(x.confidence)}</span><div>${esc(noIds(x.why))}</div><div class="s">${refs(x.ids)}</div></div></li>`).join('')}</ul>` : '<p class="muted">No forward-looking items found yet.</p>'}
         <p class="muted" style="font-size:12px;margin-top:8px">Forecasts are inferred from tabled items, follow-ups and recurring reports in the documents. Check the official agenda before the meeting.</p></div>
     </div></div></section>`;
 }
