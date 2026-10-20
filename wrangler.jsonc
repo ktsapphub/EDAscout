@@ -1,0 +1,34 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // EDAScout: one Cloudflare Worker serves the dashboard (./public) and the /api routes.
+  "name": "edascout",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  // ktsapps.com is on this Cloudflare account, so DNS + TLS are created on deploy.
+  "routes": [{ "pattern": "edascout.ktsapps.com", "custom_domain": true }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "edascout",
+      "database_id": "40f50a4c-e417-4cdd-a170-3da9eeece09d",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [{ "binding": "KV", "id": "46681e25a2ae4c229060ec6ece06812d" }],
+  "ai": { "binding": "AI" },
+  // Daily run 10:00 UTC (6:00 AM EDT / 5:00 AM EST). Weekly roll-up is written on Mondays after the daily run.
+  "triggers": { "crons": ["0 10 * * *"] },
+  "limits": { "cpu_ms": 300000 },
+  "observability": { "enabled": true },
+  "vars": {
+    "APP_URL": "https://edascout.ktsapps.com",
+    "MAX_LLM_CALLS_PER_RUN": "40",
+    "MAX_ITEMS_PER_SOURCE": "8"
+  }
+  // Optional secrets (any subset, never committed): ADMIN_KEY, OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, GROQ_API_KEY, ANTHROPIC_API_KEY
+}

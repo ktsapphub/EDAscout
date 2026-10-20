@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EDAScout · Norfolk economic development</title>
+  <meta name="description" content="A daily, source-linked command view of Norfolk economic development: EDA meetings, City Hall, deals, properties and regional signals.">
+  <meta name="theme-color" content="#225081">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23225081'/%3E%3Cpath d='M6 20c4-4 8 4 12 0s6-4 8-2' stroke='%2390BA39' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='22' cy='10' r='3' fill='%23fff'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <svg class="river" viewBox="0 0 1200 120" preserveAspectRatio="none" aria-hidden="true">
+      <path class="r1" d="M0 80 C 150 40, 300 110, 450 70 S 750 30, 900 75 S 1100 100, 1200 60"/>
+      <path class="r2" d="M0 95 C 200 70, 320 120, 520 90 S 820 60, 980 95 S 1150 110, 1200 85"/>
+      <path class="r3" d="M0 60 C 180 30, 380 90, 600 55 S 900 20, 1200 45"/>
+    </svg>
+    <div class="topbar-inner">
+      <a class="brand" href="#/" aria-label="EDAScout home">
+        <span class="mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M5 20c4-4 8 4 12 0s6-4 9-2" stroke="#90BA39" stroke-width="3" fill="none" stroke-linecap="round"/><circle cx="22" cy="10" r="3" fill="#fff"/></svg></span>
+        <span class="brand-text"><b>EDAScout</b><small>Norfolk economic development</small></span>
+      </a>
+      <nav class="nav" aria-label="Main">
+        <a href="#/" data-nav="home">Dashboard</a>
+        <a href="#/admin" data-nav="admin" class="owner-only">Sources</a>
+        <a href="#/models" data-nav="models" class="owner-only">Models</a>
+      </nav>
+      <div class="run-status" id="runStatus" aria-live="polite"><span class="dot"></span><span class="txt">Loading…</span></div>
+    </div>
+  </header>
+
+  <main id="app" tabindex="-1"></main>
+
+  <button class="ask-fab" id="askFab" aria-label="Ask EDAScout" hidden>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-2.1a7 7 0 0 0 6-6.9h-2Z"/></svg>
+    <span>Ask</span>
+  </button>
+  <aside class="ask-drawer" id="askDrawer" aria-label="Ask EDAScout" hidden>
+    <div class="ask-head"><b>Ask EDAScout</b><button class="icon-btn" id="askClose" aria-label="Close">×</button></div>
+    <div class="ask-log" id="askLog"><p class="muted">Ask a simple question, like "What did the EDA approve last meeting?" Answers come only from the sources EDAScout tracks, with links.</p></div>
+    <form class="ask-form" id="askForm">
+      <button type="button" class="orb" id="askMic" aria-label="Speak your question"><span></span></button>
+      <input id="askInput" autocomplete="off" placeholder="Type or tap the mic…" maxlength="300">
+      <button class="btn primary" type="submit">Ask</button>
+    </form>
+  </aside>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <footer class="foot">
+    <p>Independent project. Not affiliated with the City of Norfolk or the Norfolk Economic Development Authority. Summaries are machine-written from public sources. Always check the linked original.</p>
+  </footer>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
