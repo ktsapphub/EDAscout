@@ -51,7 +51,7 @@ function fmtVal(v, unit) {
   if (unit === '$') return v >= 1e5 ? `$${Math.round(v / 1000).toLocaleString('en-US')}K` : `$${Math.round(v).toLocaleString('en-US')}`;
   if (unit === '$M') return v >= 1000 ? `$${(v / 1000).toFixed(1)}B` : `$${Math.round(v).toLocaleString('en-US')}M`;
   if (unit === '%') return `${v.toFixed(1)}%`;
-  if (unit === 'k') return `${v.toFixed(1)}k`;
+  if (unit === 'k') return v >= 1000 ? `${(v / 1000).toFixed(2)}M` : `${v.toFixed(1)}k`;
   if (unit === 'days') return `${Math.round(v)} days`;
   if (unit === 'idx') return v.toFixed(0);
   return Math.round(v).toLocaleString('en-US');
