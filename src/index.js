@@ -222,7 +222,7 @@ async function dashboard(env, geo) {
   if (cached) return cached;
   const db = env.DB, G = GEO_SQL[geo];
   const ITEM = `i.id, i.title, i.url, i.summary, i.why, i.score, i.type, i.tags, i.rule_hits, i.published_at, i.found_at, s.name AS source, s.geo`;
-  const [brief, signals, meetings, cityhall, latest, lastRun, counts, health, weekly, money, moneyTotals, awards, momentum, library, outlookRow] = await Promise.all([
+  const [brief, signals, meetings, cityhall, latest, lastRun, counts, health, weekly, money, moneyTotals, awards, momentum, library, outlookRow, overviewRow] = await Promise.all([
     db.prepare("SELECT * FROM briefs WHERE kind = 'daily' ORDER BY period DESC LIMIT 1").first(),
     db.prepare(`SELECT ${ITEM}, g.status, g.rule_hit FROM signals g JOIN items i ON i.id = g.item_id JOIN sources s ON s.id = i.source_id
        WHERE g.status != 'dismissed' AND i.type NOT IN ('meeting','context') AND s.geo IN ${G} AND (i.published_at IS NULL OR i.published_at >= date('now','-180 days') OR g.status = 'pinned')
@@ -248,7 +248,9 @@ async function dashboard(env, geo) {
        WHERE i.found_at >= datetime('now','-56 days') AND i.type != 'context' AND s.geo IN ${G} GROUP BY i.tags, wk`).all(),
     db.prepare(`SELECT ${ITEM}, s.kind FROM items i JOIN sources s ON s.id = i.source_id WHERE i.type = 'context' ORDER BY s.tier, s.name LIMIT 24`).all(),
     db.prepare("SELECT body, created_at, model FROM briefs WHERE kind = 'eda_outlook' ORDER BY id DESC LIMIT 1").first(),
+    db.prepare("SELECT body, created_at, model FROM briefs WHERE kind = ? ORDER BY period DESC LIMIT 1").bind(`overview_${geo}`).first(),
   ]);
+  const overview = overviewRow ? { ...safeParse(overviewRow.body), created: overviewRow.created_at, model: overviewRow.model } : null;
   const outlook = outlookRow ? { ...JSON.parse(outlookRow.body), created: outlookRow.created_at } : null;
 
   const parsed = brief ? JSON.parse(brief.body) : null;
@@ -283,13 +285,20 @@ async function dashboard(env, geo) {
     awards: awards.results,
     topics: { weeks, list: topics },
     library: library.results,
-    outlook,
+    outlook, overview, nextRefresh: nextRefresh(),
   };
   await env.KV.put(ck, JSON.stringify(out), { expirationTtl: 300 }).catch(() => {});
   return out;
 }
 
 const safeParse = s => { try { return JSON.parse(s); } catch { return null; } };
+
+// Cron runs every 6 hours on the hour (UTC 00, 06, 12, 18).
+function nextRefresh() {
+  const d = new Date(); d.setUTCMinutes(0, 0, 0);
+  d.setUTCHours(Math.floor(d.getUTCHours() / 6) * 6 + 6);
+  return d.toISOString();
+}
 
 function nextFirstWednesday() {
   const now = new Date(Date.now() - 4 * 3600e3);

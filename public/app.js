@@ -113,6 +113,9 @@ async function renderDashboard(geoChange = false) {
   catch (e) { app.innerHTML = `<p class="empty">Couldn't load the dashboard: ${esc(e.message)}</p>`; return; }
   swap(() => drawDashboard(dash));
   ticker(dash.latest);
+  // No one should have to press a button for fresh data: if the last update is old (missed schedule), refresh in the background.
+  const run = dash.lastRun;
+  if (!scanning && (!run || (run.finished_at && hoursSince(run.finished_at) > 7) || run.stale)) backgroundScan();
   if (geoChange) toast(`Showing ${GEO_NAMES[geo]}`);
 }
 
@@ -126,49 +129,48 @@ function ticker(list) {
 
 function drawDashboard(d) {
   const run = d.lastRun;
-  if (!run) setStatus('idle', 'No scan yet');
-  else if (!run.finished_at && !run.stale) setStatus('live', 'Scanning sources…');
+  if (scanning) setStatus('live', 'Refreshing sources…');
+  else if (!run) setStatus('idle', 'No update yet');
+  else if (!run.finished_at && !run.stale) setStatus('live', 'Refreshing sources…');
   else setStatus(run.ok ? '' : 'bad', `Updated ${ago(run.finished_at || run.started_at)}`);
-  const healthy = d.health?.ok || 0, total = (d.health?.ok || 0) + (d.health?.failing || 0) + (d.health?.pending || 0);
-  const g = GEO_NAMES[geo];
+  startRefreshClock(d);
+  const g = GEO_NAMES[geo], B = buildBrief(d, trendData?.metrics || []);
+  const eda = edaZone(d);
 
   app.innerHTML = `
   <section class="zone reveal" id="today"><div class="divider"><span>Today · ${g}</span></div>
     <div class="grid">
-      <div class="span-12 kpis">
-        <div class="kpi"><div class="n" data-count="${d.kpis.new_signals || 0}">0</div><div class="l">New signals in the last day</div></div>
-        <div class="kpi"><div class="n date">${d.kpis.nextEda ? fmtDate(d.kpis.nextEda) : '—'}</div><div class="l">Next EDA meeting · <span class="countdown">${countdown(d.kpis.nextEda)}</span></div></div>
-        <div class="kpi"><div class="n" data-money="${(d.money.totals || []).reduce((a, t) => a + t.total, 0)}">$0</div><div class="l">Dollars mentioned in sources (90 days)</div></div>
-        <div class="kpi"><div class="n" data-count="${healthy}">0</div><div class="l">Sources reading cleanly of ${total}</div><div class="bar"><i data-w="${total ? Math.round(healthy / total * 100) : 0}"></i></div></div>
-      </div>
-      ${briefPanel(d)}
+      <div class="span-12 kpis">${kpiRow(d, B)}</div>
+      ${briefPanel(d, B)}
     </div>
   </section>
+
+  ${geo === 'norfolk' ? eda : ''}
 
   <section class="zone reveal" id="trends"><div class="divider"><span>Trends · ${g}</span><small>Source: FRED · change vs. a year earlier</small></div>
     ${trendsBlock()}
   </section>
 
-  <section class="zone reveal" id="signals"><div class="divider"><span>Signals &amp; EDA</span></div>
+  <section class="zone reveal" id="signals"><div class="divider"><span>Signals · ${g}</span><small>Scored 0–100 for relevance to Norfolk economic development</small></div>
     <div class="grid">
-      <section class="panel span-7 ${d.signals.some(s => isFresh(s.found_at)) ? 'has-new' : ''}">
+      <section class="panel span-12 ${d.signals.some(s => isFresh(s.found_at)) ? 'has-new' : ''}">
         <div class="panel-head"><h2>${ico('radar')}Signal Board</h2><span class="meta">${d.signals.length} active · ${g}</span></div>
         <div class="filters" role="toolbar" aria-label="Filter signals">${['All', ...new Set(d.signals.flatMap(s => (s.tags || '').split(',').filter(Boolean)))].slice(0, 9).map(t => `<button class="chip ${t === filter ? 'on' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>
-        <div class="panel-body flush scroll"><div class="cards" id="signalCards">${signalCards(d.signals)}</div></div>
+        <div class="panel-body flush scroll"><div class="cards two" id="signalCards">${signalCards(d.signals)}</div></div>
       </section>
-      ${edaPanel(d)}
-      ${outlookPanel(d)}
     </div>
   </section>
 
-  <section class="zone reveal" id="money"><div class="divider"><span>Money &amp; Housing</span><small>Dollar figures found in sources · federal awards in Norfolk</small></div>
+  <section class="zone reveal" id="money"><div class="divider"><span>Money &amp; Housing · ${g}</span><small>Dollar figures found in sources · federal awards in Norfolk</small></div>
     <div class="grid">${moneyPanel(d)}${awardsPanel(d)}</div>
   </section>
 
+  ${geo !== 'norfolk' ? eda : ''}
+
   <section class="zone reveal" id="cityhall"><div class="divider"><span>City Hall &amp; Latest</span></div>
     <div class="grid">
-      <section class="panel span-6"><div class="panel-head"><h2>${ico('hall')}City Hall Feed</h2><span class="meta">Council, Planning &amp; boards</span></div>
-        <div class="panel-body flush">${d.cityhall.length ? `<ul class="rows">${d.cityhall.map(r => `<li><button class="linkbtn" data-story="${r.id}">${esc(r.title)}</button><span class="s">${esc(r.summary || '')}${r.summary ? ' · ' : ''}found ${ago(r.found_at)}</span></li>`).join('')}</ul>` : '<p class="empty" style="padding:16px">City Hall meetings appear once iQM2 answers. EDAScout retries through a browser automatically.</p>'}</div></section>
+      <section class="panel span-6"><div class="panel-head"><h2>${ico('hall')}Norfolk City Hall</h2><span class="meta">Council, Planning &amp; boards</span></div>
+        <div class="panel-body flush">${d.cityhall.length ? `<ul class="rows">${d.cityhall.map(r => `<li><button class="linkbtn" data-story="${r.id}">${esc(r.title)}</button><span class="s">${esc(r.summary || '')}${r.summary ? ' · ' : ''}found ${ago(r.found_at)}</span></li>`).join('')}</ul>` : '<p class="empty" style="padding:16px">No City Hall items in the latest update.</p>'}</div></section>
       <section class="panel span-6"><div class="panel-head"><h2>${ico('feed')}Latest from all sources</h2><span class="meta">${g} · newest first</span></div>
         <div class="panel-body flush scroll" style="max-height:520px">${d.latest.length ? `<ul class="rows">${d.latest.map(r => `<li><button class="linkbtn" data-story="${r.id}">${esc(r.title)}</button><span class="s"><span class="src"><img src="${favicon(r.url)}" alt="" loading="lazy"> ${esc(r.source)}</span> · ${ago(r.found_at)}</span></li>`).join('')}</ul>` : '<p class="empty" style="padding:16px">Nothing yet.</p>'}</div></section>
     </div>
@@ -179,7 +181,7 @@ function drawDashboard(d) {
       <section class="panel span-5"><div class="panel-head"><h2>${ico('trend')}Topic momentum</h2><span class="meta">green = this week</span></div>
         <div class="panel-body flush">${topicsList(d.topics)}</div></section>
       <section class="panel span-7"><div class="panel-head"><h2>${ico('book')}Plans &amp; research library</h2><span class="meta">context, not news</span></div>
-        <div class="lib">${d.library.map(r => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title.slice(0, 90))}<span>${esc(r.source)}</span></a>`).join('') || '<p class="empty">Loads after the first scan.</p>'}</div></section>
+        <div class="lib">${d.library.map(r => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title.slice(0, 90))}<span>${esc(r.source)}</span></a>`).join('') || '<p class="empty">Loads after the first update.</p>'}</div></section>
     </div>
   </section>
 
@@ -188,10 +190,216 @@ function drawDashboard(d) {
   $$('[data-count]').forEach(el => countUp(el, +el.dataset.count));
   $$('[data-money]').forEach(el => countUp(el, +el.dataset.money, money));
   requestAnimationFrame(() => $$('.kpi [data-w]').forEach(el => (el.style.width = el.dataset.w + '%')));
-  wireDashboard(d);
+  wireDashboard(d, B);
   drawTrendChart();
   reveal();
 }
+
+// ---------------- brief: built from what is on the page, per area ----------------
+const pickM = (ms, k) => ms.find(m => m.key === k);
+const firstSentence = t => (String(t || '').match(/^.*?[.!?](\s|$)/)?.[0] || String(t || '')).trim();
+const USELESS = /does not provide|no relevant text|not provided in|unable to (?:determine|summari)/i;
+function chgWords(m) {
+  if (m.change == null) return '';
+  if (m.unit === '%') return Math.abs(m.change) < 0.05 ? 'flat vs. a year ago' : `${m.change > 0 ? 'up' : 'down'} ${Math.abs(m.change).toFixed(1)} pts vs. a year ago`;
+  return Math.abs(m.pct) < 0.05 ? 'flat vs. a year ago' : `${m.pct > 0 ? 'up' : 'down'} ${Math.abs(m.pct).toFixed(1)}% vs. a year ago`;
+}
+const metricLine = m => `${m.label} ${fmtVal(m.latest.v, m.unit)}${chgWords(m) ? ', ' + chgWords(m) : ''}`;
+const direction = m => m.change == null || m.better === 'neutral' || Math.abs(m.pct ?? m.change) < 0.05 ? 0 : (m.change > 0) === (m.better === 'up') ? 1 : -1;
+
+function buildBrief(d, ms) {
+  const g = GEO_NAMES[geo];
+  const dir = ms.filter(m => m.better !== 'neutral' && m.change != null);
+  const up = dir.filter(m => direction(m) === 1), down = dir.filter(m => direction(m) === -1);
+  const keyOrder = geo === 'norfolk' ? ['unemp', 'list_price', 'income', 'gdp'] : ['unemp', 'jobs', 'gdp', 'list_price', 'permits'];
+  const keyMetrics = keyOrder.map(k => pickM(ms, k)).filter(Boolean);
+  const dataSyn = ms.length
+    ? `${dir.length ? `Of ${dir.length} indicators with a clear good-or-bad direction, ${up.length} improved and ${down.length} weakened over the past year. ` : ''}${keyMetrics.slice(0, 3).map(metricLine).join('; ')}.`
+    : `Trend data for ${g} loads with the next update.`;
+
+  const sigs = d.signals, fresh = sigs.filter(s => isFresh(s.found_at)).length;
+  const ranked = [...sigs].sort((a, b) => b.score - a.score);
+  const top85 = ranked.filter(s => s.score >= 85).slice(0, 6);
+  const closest = top85.length ? [] : ranked.slice(0, 3);
+
+  const totals = d.money.totals || [], total = totals.reduce((a, t) => a + t.total, 0), mentions = totals.reduce((a, t) => a + t.n, 0);
+  const lp = pickM(ms, 'list_price'), dom = pickM(ms, 'dom');
+  const wk = d.latest.filter(r => Date.now() - toDate(r.found_at) < 7 * 864e5).length;
+  const hot = (d.topics?.list || []).map(t => ({ tag: t.tag, now: t.weeks.at(-1) || 0, prev: t.weeks.at(-2) || 0, total: t.total })).sort((a, b) => b.now - a.now || b.total - a.total)[0];
+
+  const areas = [
+    { id: 'trends', icon: 'trend', label: 'Trends', line: ms.length ? `${dir.length ? `${up.length} of ${dir.length} indicators improved over the year. ` : ''}${keyMetrics[0] ? metricLine(keyMetrics[0]) + '.' : ''}` : 'Trend data loads with the next update.' },
+    { id: 'signals', icon: 'radar', label: 'Signals', line: sigs.length ? `${sigs.length} active signal${sigs.length > 1 ? 's' : ''}, ${fresh} new in the last day. Strongest: “${ranked[0].title.slice(0, 90)}” (score ${ranked[0].score}).` : `No active signals for ${g} yet.` },
+    { id: 'money', icon: 'coin', label: 'Money & Housing', line: `${total ? `${money(total)} in dollar figures across ${mentions} mention${mentions > 1 ? 's' : ''} in the last 90 days, mostly ${totals[0].kind}. ` : 'No dollar figures in recent stories. '}${lp ? `Median list price ${fmtVal(lp.latest.v, lp.unit)}${chgWords(lp) ? ', ' + chgWords(lp) : ''}` : ''}${dom ? `; homes sell in a median ${fmtVal(dom.latest.v, dom.unit)}` : ''}${lp || dom ? '.' : ''}` },
+    { id: 'cityhall', icon: 'hall', label: 'City Hall & Latest', line: `${wk} stor${wk === 1 ? 'y' : 'ies'} found in the past week.${d.cityhall.length ? ` Latest from Norfolk City Hall: “${d.cityhall[0].title.slice(0, 80)}”.` : ''}` },
+    { id: 'topics', icon: 'book', label: "What's heating up", line: hot && hot.now ? `${hot.tag} leads this week with ${hot.now} item${hot.now > 1 ? 's' : ''}${hot.prev ? ` (${hot.prev} the week before)` : ''}.` : hot ? `Quiet week so far. ${hot.tag} is the busiest topic over 8 weeks (${hot.total} items).` : 'Builds up as items arrive.' },
+  ];
+  const nextEda = d.kpis.nextEda, edaDays = nextEda ? Math.max(0, Math.ceil((toDate(nextEda) - Date.now()) / 864e5)) : null;
+  const lastMtg = d.outlook?.last_meeting;
+  if (geo === 'norfolk') areas.unshift({ id: 'eda', icon: 'cal', label: 'EDA Board', line: `${edaDays != null ? `Next meeting ${fmtDate(nextEda)}, in ${edaDays} day${edaDays === 1 ? '' : 's'}. ` : ''}${lastMtg?.summary ? `Last meeting (${fmtDate(lastMtg.date)}): ${firstSentence(noIds(lastMtg.summary))}` : ''}` });
+  const synopsis = d.overview?.text ? noIds(d.overview.text) : dataSyn;
+  return { g, ms, dir, up, down, keyMetrics, dataSyn, synopsis, aiSynopsis: !!d.overview?.text, top85, closest, areas, nextEda, edaDays };
+}
+
+function kpiRow(d, B) {
+  const healthy = d.health?.ok || 0, total = (d.health?.ok || 0) + (d.health?.failing || 0) + (d.health?.pending || 0);
+  if (geo === 'norfolk') return `
+    <div class="kpi"><div class="n" data-count="${B.edaDays ?? 0}">0</div><div class="l">Days until the next EDA meeting · ${B.nextEda ? fmtDate(B.nextEda) : '—'}</div></div>
+    <div class="kpi"><div class="n" data-count="${d.kpis.new_signals || 0}">0</div><div class="l">New signals in the last day</div></div>
+    <div class="kpi"><div class="n" data-money="${(d.money.totals || []).reduce((a, t) => a + t.total, 0)}">$0</div><div class="l">Dollars mentioned in sources (90 days)</div></div>
+    <div class="kpi"><div class="n" data-count="${healthy}">0</div><div class="l">Sources reading cleanly of ${total}</div><div class="bar"><i data-w="${total ? Math.round(healthy / total * 100) : 0}"></i></div></div>`;
+  const tile = k => { const m = pickM(B.ms, k); return m ? `<div class="kpi"><div class="n">${fmtVal(m.latest.v, m.unit)}</div><div class="l">${esc(m.label)}${chgWords(m) ? ` · <span class="chg ${['flat', 'good', 'bad'][[0, 1, -1].indexOf(direction(m))]}">${esc(chgWords(m))}</span>` : ''}</div></div>` : ''; };
+  return ['unemp', 'jobs', 'gdp', 'list_price'].map(tile).join('') || '<div class="kpi"><div class="l">Trend data loads with the next update.</div></div>';
+}
+
+function sigStory(s, i) {
+  return `<article class="story" style="animation-delay:${i * 70}ms" data-say="sig${i}">
+    <span class="num">${s.score}</span>
+    <h3>${esc(s.title.slice(0, 140))}</h3>
+    <p>${esc(storySummary(s, s.why || ''))}</p>
+    <div class="row"><span class="src">${esc(s.source)}${s.published_at ? ' · ' + fmtDate(s.published_at) : ''}</span><button class="read" data-story="${s.id}">Read story ↗</button></div>
+  </article>`;
+}
+
+function briefPanel(d, B) {
+  const top = B.top85.length
+    ? `<div class="stories">${B.top85.map(sigStory).join('')}</div>`
+    : `<p class="note">No story scored 85 or higher for ${B.g} in this update.${B.closest.length ? ' Closest to the bar:' : ''}</p>${B.closest.length ? `<div class="stories dim">${B.closest.map(sigStory).join('')}</div>` : ''}`;
+  const lead = geo === 'norfolk'
+    ? `<div class="lead-chip"><div class="big" data-count="${B.edaDays ?? 0}">0</div><div><b>day${B.edaDays === 1 ? '' : 's'} until the next EDA meeting</b><span>${B.nextEda ? fmtDate(B.nextEda) : ''} · 12:00 PM · 999 Waterside Dr.</span><button class="jump" data-jump="eda">See EDA meetings ↓</button></div></div>`
+    : `<div class="lead-chip"><div class="big">${B.up.length}<small>/${B.dir.length}</small></div><div><b>indicators improved over the year</b><span>${B.g} · Federal Reserve (FRED) data</span><button class="jump" data-jump="trends">See trends ↓</button></div></div>`;
+  return `<section class="panel brief span-12">
+    <div class="panel-head"><h2>Today's Brief · ${B.g}</h2>
+      <span class="meta">${fmtDate(new Date().toISOString().slice(0, 10))} · ${B.aiSynopsis ? 'AI synopsis of this page' : 'summary of this page'}</span>
+      <button class="listen" id="listen"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="wave"><i></i><i></i><i></i><i></i></span><span class="lt">Listen</span></button>
+    </div>
+    <div class="panel-body">
+      <div class="brief-top">${lead}<div class="synopsis" data-say="syn"><h4>Synopsis</h4><p>${esc(B.synopsis)}</p></div></div>
+      <h4 class="bh"><span>Top signals · score 85+</span></h4>${top}
+      <h4 class="bh"><span>Area by area</span></h4>
+      <ol class="areas">${B.areas.map((a, i) => `<li data-say="area${i}" style="--i:${i}"><span class="ai">${ico(a.icon)}</span><div><b>${esc(a.label)}</b><p>${esc(a.line)}</p></div><button class="jump" data-jump="${a.id}" aria-label="Go to ${esc(a.label)}">View ↓</button></li>`).join('')}</ol>
+      ${B.keyMetrics.length ? `<h4 class="bh"><span>The numbers</span></h4><div class="nums">${B.keyMetrics.map(m => `<div class="num-chip"><span>${esc(m.label)}</span><b>${fmtVal(m.latest.v, m.unit)}</b><i class="chg ${['flat', 'good', 'bad'][[0, 1, -1].indexOf(direction(m))]}">${esc(chgWords(m) || fmtDate(m.latest.d))}</i></div>`).join('')}</div>` : ''}
+    </div>
+  </section>`;
+}
+
+function briefSpeech(B) {
+  const parts = [{ say: null, text: `Here is your ${B.g} economic development brief.` }];
+  if (geo === 'norfolk' && B.edaDays != null) parts.push({ say: null, text: `The next E.D.A. meeting is ${fmtDate(B.nextEda)}, ${B.edaDays} days from now.` });
+  parts.push({ say: 'syn', text: B.synopsis });
+  if (B.top85.length) B.top85.forEach((s, i) => parts.push({ say: `sig${i}`, text: `Top signal, score ${s.score}. ${s.title}. ${storySummary(s, '')}` }));
+  else parts.push({ say: null, text: 'No story scored 85 or higher in this update.' });
+  B.areas.forEach((a, i) => parts.push({ say: `area${i}`, text: `${a.label}. ${a.line}` }));
+  return parts;
+}
+
+// ---------------- EDA board meetings ----------------
+function meetingGroups(d) {
+  const by = new Map();
+  for (const m of d.meetings) {
+    const k = m.meeting_date || m.created_at?.slice(0, 10) || 'undated';
+    if (!by.has(k)) by.set(k, { date: m.meeting_date, docs: [] });
+    by.get(k).docs.push(m);
+  }
+  return [...by.values()].map(gp => {
+    const order = ['minutes', 'agenda'];
+    gp.docs.sort((a, b) => order.indexOf(a.doc_kind) - order.indexOf(b.doc_kind));
+    const good = gp.docs.find(x => x.summary && !USELESS.test(x.summary));
+    gp.synopsis = good ? noIds(good.summary) : 'The documents for this meeting could not be read automatically. Open the PDF for details.';
+    gp.from = good?.doc_kind || '';
+    gp.past = gp.date ? toDate(gp.date) < Date.now() : true;
+    const seen = new Set();
+    gp.actions = gp.docs.flatMap(x => (x.actions?.actions || []).filter(a => a.item)).filter(a => { const k = a.item.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 5);
+    gp.detailId = (good || gp.docs[0]).id;
+    return gp;
+  });
+}
+function meetingSpeech(gp) {
+  return `E.D.A. meeting, ${gp.date ? fmtDate(gp.date) : 'undated'}. ${gp.synopsis} ${gp.actions.length ? 'Items: ' + gp.actions.map(a => a.item + (val(a.outcome) ? `, ${a.outcome}` : '')).join('. ') + '.' : ''}`;
+}
+function outlookSpeech(o) {
+  if (!o) return 'The E.D.A. outlook is not available yet.';
+  const lm = o.last_meeting || {};
+  return [`E.D.A. outlook.`, lm.summary ? `Last meeting, ${fmtDate(lm.date)}: ${noIds(lm.summary)}` : '',
+    o.initiatives?.length ? `In motion: ${o.initiatives.map(x => `${x.name}. ${noIds(x.status)}`).join(' ')}` : '',
+    o.upcoming?.length ? `Likely on upcoming agendas: ${o.upcoming.map(x => `${x.topic}, ${x.confidence}`).join('; ')}.` : ''].filter(Boolean).join(' ');
+}
+
+function edaZone(d) {
+  const nextEda = d.kpis.nextEda, dt = nextEda ? toDate(nextEda) : null;
+  const days = dt ? Math.max(0, Math.ceil((dt - Date.now()) / 864e5)) : null;
+  const groups = meetingGroups(d);
+  return `<section class="zone reveal" id="eda"><div class="divider"><span>EDA Board Meetings</span><small>Norfolk Economic Development Authority · agendas &amp; minutes</small></div>
+    <div class="grid">
+      <section class="panel span-4 next-card">
+        <div class="panel-head"><h2>${ico('cal')}Next meeting</h2></div>
+        <div class="panel-body">
+          ${dt ? `<div class="nm"><div class="cal"><div class="m">${dt.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })}</div><div class="d">${dt.getUTCDate()}</div></div>
+            <div><div class="days"><b data-count="${days}">0</b> day${days === 1 ? '' : 's'} away</div><div class="muted">${dt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' })} · 12:00 PM<br>999 Waterside Dr., Suite 400<br>Budget committee 11:15 AM</div></div></div>` : '<p class="muted">Date not posted yet.</p>'}
+          <div class="nm-actions"><button class="btn" data-speak="outlook">▶ Listen to the outlook</button>
+          <a class="btn" href="https://norfolkdevelopment.com/target-industries/the-norfolk-economic-development-authority/" target="_blank" rel="noopener">EDA page ↗</a></div>
+          <p class="muted" style="font-size:12px;margin:10px 0 0">First Wednesday of each month. Confirm on the EDA page before attending.</p>
+        </div>
+      </section>
+      ${outlookPanel(d, 'span-8')}
+      <section class="panel span-12"><div class="panel-head"><h2>${ico('book')}Previous meetings</h2><span class="meta">${groups.length} meeting${groups.length === 1 ? '' : 's'} · quick synopsis · tap Listen to hear it</span></div>
+        <div class="panel-body">${groups.length ? `<div class="mtgs">${groups.map((gp, i) => {
+          const t = gp.date ? toDate(gp.date) : null;
+          return `<article class="mtg" style="--i:${i}">
+            <div class="mtg-date">${t ? `<span class="m">${t.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })}</span><span class="d">${t.getUTCDate()}</span><span class="y">${t.getUTCFullYear()}</span>` : '<span class="m">—</span>'}</div>
+            <div class="mtg-body">
+              <div class="mtg-docs">${gp.docs.map(x => `<a class="doc ${esc(x.doc_kind)}" href="${esc(x.doc_url)}" target="_blank" rel="noopener">${esc(x.doc_kind === 'minutes' ? 'Minutes' : 'Agenda')} PDF ↗</a>`).join('')}${gp.from ? `<span class="muted">synopsis from the ${esc(gp.from)}</span>` : ''}</div>
+              <p>${esc(gp.synopsis)}</p>
+              ${gp.actions.length ? `<ul>${gp.actions.map(a => `<li>${esc(a.item)}${val(a.outcome) ? ` · <i>${esc(a.outcome)}</i>` : ''}${val(a.amount_usd) ? ` <span class="amtchip">${esc(a.amount_usd)}</span>` : ''}${val(a.vote) ? ` <span class="amtchip">vote ${esc(a.vote)}</span>` : ''}</li>`).join('')}</ul>` : ''}
+              <div class="mtg-actions"><button class="btn sm" data-speak="mtg${i}">▶ Listen</button><button class="linkbtn" data-story="${gp.detailId}">Full details</button></div>
+            </div>
+          </article>`; }).join('')}</div>` : '<p class="empty">Agendas and minutes appear after the next update reads the EDA site.</p>'}</div>
+      </section>
+    </div>
+  </section>`;
+}
+
+// ---------------- refresh clock ----------------
+let refreshTimer = null, scanning = false;
+function startRefreshClock(d) {
+  const el = $('#nextRefresh');
+  if (!el || !d.nextRefresh) return;
+  clearInterval(refreshTimer);
+  const target = toDate(d.nextRefresh);
+  const tick = () => {
+    const ms = target - Date.now();
+    if (ms <= 0) {
+      el.textContent = 'Updating now…';
+      if (ms < -5 * 60e3) { clearInterval(refreshTimer); dash = null; trendData = null; if (isHome()) renderDashboard(); }
+      return;
+    }
+    const h = Math.floor(ms / 3600e3), m = Math.floor(ms % 3600e3 / 60e3), s = Math.floor(ms % 60e3 / 1000);
+    el.textContent = `Next update in ${h ? h + 'h ' : ''}${String(m).padStart(h ? 2 : 1, '0')}m ${String(s).padStart(2, '0')}s`;
+  };
+  tick(); refreshTimer = setInterval(tick, 1000);
+}
+const isHome = () => !['sources', 'models'].includes(location.hash.replace(/^#\/?/, ''));
+/** Ask the server to re-read sources (allowed for everyone once per 20 minutes), then redraw. */
+async function backgroundScan() {
+  if (scanning) return;
+  scanning = true; setStatus('live', 'Refreshing sources…'); $('#refreshBtn')?.classList.add('spin');
+  try {
+    const res = await fetch('/api/run', { method: 'POST', credentials: 'same-origin' });
+    if (res.ok && res.body) { const r = res.body.getReader(); while (!(await r.read()).done) {} }
+  } catch { /* the cached data is still shown */ }
+  scanning = false; $('#refreshBtn')?.classList.remove('spin');
+  dash = null; trendData = null;
+  if (isHome()) renderDashboard();
+}
+const hoursSince = d => d ? (Date.now() - toDate(d)) / 3600e3 : Infinity;
+$('#refreshBtn')?.addEventListener('click', async () => {
+  const run = dash?.lastRun;
+  if (hoursSince(run?.finished_at) > 1) return backgroundScan();
+  const b = $('#refreshBtn'); b.classList.add('spin');
+  dash = null; trendData = null;
+  if (isHome()) await renderDashboard(); else location.hash = '#/';
+  b.classList.remove('spin'); toast('Showing the latest data');
+});
 
 const ICONS = {
   radar: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 12l6-6"/>',
@@ -230,20 +438,6 @@ function storyCard(b, i, d) {
   </article>`;
 }
 
-function briefPanel(d) {
-  const b = d.brief;
-  const body = b && b.bullets?.length
-    ? `<div class="stories" id="briefList">${b.bullets.map((x, i) => storyCard(x, i, d)).join('')}</div>`
-    : `<p class="empty">No brief yet. Open <a href="#/sources">Sources</a> and press <b>Run scan now</b> to build the first one.</p>`;
-  return `<section class="panel brief span-12">
-    <div class="panel-head"><h2>Today's Brief</h2>
-      <span class="meta">${b ? `${fmtDate(b.period)} · ${b.generated === 'rules' ? 'quick summary' : 'AI summary'} · tap a story for details` : ''}</span>
-      ${b?.bullets?.length ? `<button class="listen" id="listen"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="wave"><i></i><i></i><i></i><i></i></span><span class="lt">Listen</span></button>` : ''}
-    </div>
-    <div class="panel-body">${body}</div>
-  </section>`;
-}
-
 function signalCards(list) {
   const shown = list.filter(s => filter === 'All' || (s.tags || '').split(',').includes(filter));
   if (!shown.length) return `<p class="empty" style="padding:16px">${list.length ? 'No signals with this tag.' : `No signals for ${GEO_NAMES[geo]} yet.`}</p>`;
@@ -265,32 +459,12 @@ function signalCards(list) {
   }).join('');
 }
 
-function edaPanel(d) {
-  const nextEda = d.kpis.nextEda, dt = nextEda ? toDate(nextEda) : null;
-  const meets = d.meetings.map(m => {
-    const a = m.actions || {};
-    const acts = (a.actions || []).filter(x => x.item).slice(0, 4);
-    return `<div class="meet">
-      <div class="k"><span class="kind">${esc(m.body)} ${esc(m.doc_kind)}</span><span>${m.meeting_date ? fmtDate(m.meeting_date) : ''}</span>${m.id ? `<button class="linkbtn" data-story="${m.id}" style="margin-left:auto;font-size:12px">Details</button>` : ''}<a href="${esc(m.doc_url)}" target="_blank" rel="noopener" style="font-size:12px">PDF ↗</a></div>
-      ${m.summary ? `<h3>${esc(m.summary)}</h3>` : ''}
-      ${acts.length ? `<ul>${acts.map(x => `<li>${esc(x.item)}${val(x.outcome) ? ` · <i>${esc(x.outcome)}</i>` : ''}${val(x.amount_usd) ? ` <span class="amtchip">${esc(x.amount_usd)}</span>` : ''}${val(x.vote) ? ` <span class="amtchip">${esc(x.vote)}</span>` : ''}</li>`).join('')}</ul>`
-        : (a.amounts?.length ? `<ul><li>Amounts in document: ${a.amounts.slice(0, 4).map(x => `<span class="amtchip">${esc(x)}</span>`).join(' ')}</li></ul>` : '')}
-    </div>`;
-  }).join('');
-  return `<section class="panel span-5 ${d.meetings.some(m => isFresh(m.created_at)) ? 'has-new' : ''}">
-    <div class="panel-head"><h2>${ico('cal')}EDA Watch</h2><span class="meta">agendas &amp; minutes</span></div>
-    ${dt ? `<div class="next-meet"><div class="cal"><div class="m">${dt.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })}</div><div class="d">${dt.getUTCDate()}</div></div>
-      <div><b>Next EDA meeting</b> <span class="countdown">${countdown(nextEda)}</span><div class="muted" style="font-size:13px">Wednesday, 12:00 PM · 999 Waterside Dr., Suite 400. Budget committee 11:15 AM. <a href="https://norfolkdevelopment.com/target-industries/the-norfolk-economic-development-authority/" target="_blank" rel="noopener">Confirm on EDA page ↗</a></div></div></div>` : ''}
-    <div class="panel-body flush scroll" style="max-height:620px">${meets || '<p class="empty" style="padding:16px">Agendas and minutes appear once the EDA site answers. EDAScout now retries through a browser.</p>'}</div>
-  </section>`;
-}
-
-function outlookPanel(d) {
+function outlookPanel(d, span = 'span-12') {
   const o = d.outlook;
   const refs = ids => (ids || []).map(id => d.cites[id]).filter(Boolean).slice(0, 3).map(c => `<button class="linkbtn" data-story="${c.id}">${esc(c.title.replace(/^EDA /, '').slice(0, 46))}</button>`).join(' · ');
-  if (!o) return `<section class="panel span-12"><div class="panel-head"><h2>${ico('radar')}EDA Outlook</h2><span class="meta">last meeting · in motion · what's next</span></div><div class="panel-body"><p class="empty">Once EDAScout reads the EDA's agendas and minutes, this panel explains the last meeting, the initiatives in motion, and what is likely on upcoming agendas, each linked to its evidence.</p></div></section>`;
+  if (!o) return `<section class="panel ${span}"><div class="panel-head"><h2>${ico('radar')}EDA Outlook</h2><span class="meta">last meeting · in motion · what's next</span></div><div class="panel-body"><p class="empty">Once EDAScout reads the EDA's agendas and minutes, this panel explains the last meeting, the initiatives in motion, and what is likely on upcoming agendas, each linked to its evidence.</p></div></section>`;
   const lm = o.last_meeting || {};
-  return `<section class="panel span-12 outlook"><div class="panel-head"><h2>${ico('radar')}EDA Outlook</h2><span class="meta">from ${o.docs?.length || 0} EDA documents · updated ${ago(o.created)}</span></div>
+  return `<section class="panel ${span} outlook"><div class="panel-head"><h2>${ico('radar')}EDA Outlook</h2><span class="meta">from ${o.docs?.length || 0} EDA documents · updated ${ago(o.created)}</span></div>
     <div class="panel-body"><div class="ol-grid">
       <div class="ol-col"><h4>Last meeting${lm.date ? ` · ${fmtDate(lm.date)}` : ''}</h4><p>${esc(noIds(lm.summary))}</p>
         ${lm.decisions?.length ? `<ul class="ol-list">${lm.decisions.map(x => `<li><span class="ol-dot done"></span><div>${esc(noIds(x.text))}<div class="s">${refs(x.ids)}</div></div></li>`).join('')}</ul>` : ''}</div>
@@ -423,15 +597,22 @@ function wireTrends() {
   });
 }
 
-function wireDashboard(d) {
+function wireDashboard(d, B) {
   $$('.filters .chip').forEach(c => c.onclick = () => {
     filter = c.dataset.tag;
     $$('.filters .chip').forEach(x => x.classList.toggle('on', x === c));
     swap(() => { $('#signalCards').innerHTML = signalCards(d.signals); bars(); wireCards(d); wireStories(); });
   });
   bars(); wireCards(d); wireStories(); wireTrends();
+  $$('[data-jump]').forEach(b => b.onclick = () => $('#' + b.dataset.jump)?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' }));
   const L = $('#listen');
-  if (L) L.onclick = () => listen(d, L);
+  if (L) L.onclick = () => speakParts(briefSpeech(B), L);
+  const groups = meetingGroups(d);
+  $$('[data-speak]').forEach(btn => btn.onclick = () => {
+    const k = btn.dataset.speak;
+    const text = k === 'outlook' ? outlookSpeech(d.outlook) : meetingSpeech(groups[+k.slice(3)]);
+    speakParts([{ say: null, text }], btn);
+  });
 }
 const bars = () => requestAnimationFrame(() => $$('.score [data-w]').forEach(el => (el.style.width = el.dataset.w + '%')));
 const wireStories = () => $$('[data-story]', app).forEach(b => b.onclick = e => { e.preventDefault(); openStory(+b.dataset.story); });
@@ -514,15 +695,16 @@ function speakText(text, { onstart, onend } = {}) {
   u.onstart = onstart; u.onend = onend; u.onerror = onend;
   speechSynthesis.speak(u);
 }
-function listen(d, btn) {
-  const clear = () => { btn.classList.remove('speaking-now'); btn.querySelector('.lt').textContent = 'Listen'; $$('#briefList .story').forEach(l => l.classList.remove('speaking')); };
-  if (speechSynthesis.speaking) { speechSynthesis.cancel(); clear(); return; }
-  btn.classList.add('speaking-now'); btn.querySelector('.lt').textContent = 'Stop';
-  const items = d.brief.bullets;
-  speakText(`Here is your ${GEO_NAMES[geo]} economic development brief for ${fmtDate(d.brief.period)}.`);
-  items.forEach((b, i) => speakText(`Story ${i + 1}. ${b.text}`, {
-    onstart: () => $$('#briefList .story').forEach(l => l.classList.toggle('speaking', +l.dataset.i === i)),
-    onend: () => { if (i === items.length - 1) clear(); },
+/** Read a list of parts aloud; the button toggles to Stop; the part being read is highlighted. */
+function speakParts(parts, btn) {
+  const label = btn.querySelector('.lt') || btn, orig = btn.dataset.orig || label.textContent;
+  btn.dataset.orig = orig;
+  const clear = () => { btn.classList.remove('speaking-now'); label.textContent = orig; $$('[data-say].speaking').forEach(l => l.classList.remove('speaking')); };
+  if (speechSynthesis.speaking) { const same = btn.classList.contains('speaking-now'); speechSynthesis.cancel(); $$('.speaking-now').forEach(x => { x.classList.remove('speaking-now'); const l = x.querySelector('.lt') || x; l.textContent = x.dataset.orig || l.textContent; }); clear(); if (same) return; }
+  btn.classList.add('speaking-now'); label.textContent = btn.querySelector('.lt') ? 'Stop' : '■ Stop';
+  parts.forEach((p, i) => speakText(p.text, {
+    onstart: () => { $$('[data-say].speaking').forEach(l => l.classList.remove('speaking')); if (p.say) $(`[data-say="${p.say}"]`)?.classList.add('speaking'); },
+    onend: () => { if (i === parts.length - 1) clear(); },
   }));
 }
 

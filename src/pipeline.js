@@ -3,9 +3,10 @@ import { politeFetch, robustFetch, robotsAllows, sha256, extractLinks, contentLi
   stripTags, dateFromText, lastDateIn, safeUrl, isoDate, today } from './util.js';
 import { scoreItem, watchRule } from './score.js';
 import { chat, budget as newBudget } from './llm.js';
-import { refreshMetrics, refreshAwards, storeMoney } from './data.js';
+import { refreshMetrics, refreshAwards, storeMoney, trends } from './data.js';
 
-const CADENCE_DAYS = { daily: 0.8, weekly: 6.5, monthly: 27 };
+// Daily sources are re-read on every 6-hour refresh; weekly and monthly ones far less often.
+const CADENCE_DAYS = { daily: 0.2, weekly: 6.5, monthly: 27 };
 
 export async function dueSources(env, force = false) {
   const { results } = await env.DB.prepare('SELECT * FROM sources WHERE active = 1 AND deleted_at IS NULL ORDER BY tier, id').all();
@@ -40,7 +41,9 @@ export async function runDaily(env, { trigger = 'cron', force = false, onProgres
   onProgress({ type: 'phase', phase: 'brief' });
   const brief = await writeDailyBrief(env, ctx);
   try { if (await writeEdaOutlook(env, ctx, { force })) onProgress({ type: 'data', name: 'EDA Outlook (last meeting + what is next)', ok: 1 }); } catch (e) { onProgress({ type: 'data', name: 'EDA Outlook', error: String(e.message || e) }); }
-  if (new Date().getUTCDay() === 1) await writeWeekly(env, ctx).catch(() => {});
+  try { const n = await writeOverviews(env, ctx); onProgress({ type: 'data', name: 'Area briefs (Norfolk, Hampton Roads, Virginia)', ok: n }); } catch (e) { onProgress({ type: 'data', name: 'Area briefs', error: String(e.message || e) }); }
+  const now = new Date();
+  if (now.getUTCDay() === 1 && now.getUTCHours() >= 12 && now.getUTCHours() < 18) await writeWeekly(env, ctx).catch(() => {});
 
   await env.DB.prepare(`UPDATE runs SET finished_at = datetime('now'), ok = ?, sources_ok = ?, sources_failed = ?, items_new = ?, llm_calls = ? WHERE id = ?`)
     .bind(ctx.failed > ctx.ok ? 0 : 1, ctx.ok, ctx.failed, ctx.newItems, ctx.budget.used, run.id).run();
@@ -366,3 +369,50 @@ ${material}` },
   return true;
 }
 const safeJson = s => { try { return JSON.parse(s); } catch { return null; } };
+
+
+// ---------- Area briefs: a short macro synopsis per geography, written from numbers already computed (one small call each) ----------
+const GEO_LABEL = { norfolk: 'Norfolk', region: 'Hampton Roads', state: 'Virginia' };
+const GEO_IN = { norfolk: "('norfolk')", region: "('norfolk','region')", state: "('norfolk','region','state','national')" };
+
+function fmtMetric(m) {
+  const v = m.latest.v, u = m.unit;
+  const val = u === '%' ? `${v.toFixed(1)}%` : u === '$' ? `$${Math.round(v).toLocaleString('en-US')}` : u === '$M' ? `$${(v / 1000).toFixed(1)} billion` : u === 'k' ? `${v.toFixed(1)} thousand` : u === 'days' ? `${Math.round(v)} days` : Math.round(v).toLocaleString('en-US');
+  const chg = m.change == null ? '' : u === '%' ? ` (${m.change >= 0 ? '+' : ''}${m.change.toFixed(1)} pts vs. a year earlier)` : ` (${m.pct >= 0 ? '+' : ''}${m.pct.toFixed(1)}% vs. a year earlier)`;
+  return `${m.label}: ${val} as of ${m.latest.d}${chg}`;
+}
+
+export async function overviewFacts(env, geo) {
+  const G = GEO_IN[geo];
+  const [ms, sig, money, recent] = await Promise.all([
+    trends(env, geo),
+    env.DB.prepare(`SELECT i.title, i.score FROM items i JOIN sources s ON s.id = i.source_id WHERE i.type NOT IN ('context','meeting') AND s.geo IN ${G}
+      AND (i.published_at IS NULL OR i.published_at >= date('now','-30 days')) ORDER BY i.score DESC LIMIT 5`).all(),
+    env.DB.prepare(`SELECT mo.kind, COUNT(*) n, SUM(mo.amount) total FROM money mo JOIN items i ON i.id = mo.item_id JOIN sources s ON s.id = i.source_id
+      WHERE mo.found_at >= datetime('now','-90 days') AND s.geo IN ${G} AND (i.published_at IS NULL OR i.published_at >= date('now','-365 days')) GROUP BY mo.kind ORDER BY total DESC LIMIT 3`).all(),
+    env.DB.prepare(`SELECT COUNT(*) n FROM items i JOIN sources s ON s.id = i.source_id WHERE i.type != 'context' AND s.geo IN ${G} AND i.found_at >= datetime('now','-7 days')`).first('n'),
+  ]);
+  return [
+    ...ms.map(fmtMetric),
+    `Stories found in the last 7 days: ${recent}`,
+    ...sig.results.map(r => `Story (relevance ${r.score}/100): ${r.title}`),
+    ...money.results.map(r => `Dollar figures in sources, last 90 days, ${r.kind}: $${Math.round(r.total).toLocaleString('en-US')} across ${r.n} mentions`),
+  ];
+}
+
+export async function writeOverviews(env, ctx) {
+  let n = 0;
+  for (const geo of ['norfolk', 'region', 'state']) {
+    const facts = await overviewFacts(env, geo);
+    if (facts.length < 2) continue;
+    const out = await chat(env, 'summarize', [
+      { role: 'system', content: 'You write a 3-sentence economic synopsis for a city economic development board. Use only the facts given. Plain words, no hype, no bullet points, no numbers that are not in the facts. Say what is improving, what is weakening, and one thing to watch.' },
+      { role: 'user', content: `Area: ${GEO_LABEL[geo]}\nFacts:\n- ${facts.join('\n- ')}` },
+    ], { maxTokens: 220, budget: ctx?.budget });
+    if (!out?.text) continue;
+    await env.DB.prepare("INSERT INTO briefs (kind, period, body, model) VALUES (?,?,?,?) ON CONFLICT(kind, period) DO UPDATE SET body = excluded.body, model = excluded.model, created_at = datetime('now')")
+      .bind(`overview_${geo}`, today(), JSON.stringify({ text: out.text.trim() }), out.model).run();
+    n++;
+  }
+  return n;
+}

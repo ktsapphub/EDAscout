@@ -433,3 +433,86 @@ table.src-table { width: 100%; border-collapse: collapse; font-size: 14px; }
   .river, .ticker-track { animation: none !important; }
   .ticker { overflow-x: auto; }
 }
+
+
+/* ---------- v3: refresh clock ---------- */
+.refresh { display: flex; align-items: center; gap: 8px; margin-left: 14px; }
+.refresh .cd { font: 500 12px/1 var(--mono, ui-monospace, monospace); color: rgba(255,255,255,.78); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.refresh-btn { width: 32px; height: 32px; border-radius: 50%; border: 1px solid rgba(255,255,255,.3); background: rgba(255,255,255,.08); color: #fff; display: grid; place-items: center; cursor: pointer; transition: background .2s, transform .2s var(--ease-out); }
+.refresh-btn:hover { background: rgba(255,255,255,.18); }
+.refresh-btn:active { transform: scale(.92); }
+.refresh-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.refresh-btn.spin svg { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- v3: brief ---------- */
+.brief-top { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 16px; margin-bottom: 18px; }
+.lead-chip { display: flex; gap: 14px; align-items: center; background: rgba(144,186,57,.14); border: 1px solid rgba(144,186,57,.45); border-radius: 12px; padding: 14px 16px; animation: rise .5s var(--ease-out) both; }
+.lead-chip .big { font: 800 46px/1 var(--display); color: var(--nfk-green); font-variant-numeric: tabular-nums; min-width: 64px; text-align: center; }
+.lead-chip .big small { font-size: 22px; color: rgba(255,255,255,.7); }
+.lead-chip b { display: block; color: #fff; font-size: 15px; }
+.lead-chip span { display: block; color: rgba(255,255,255,.75); font-size: 12.5px; margin: 2px 0 6px; }
+.brief .jump { background: none; border: 0; padding: 0; color: var(--nfk-green); font: 600 12.5px var(--body); cursor: pointer; }
+.brief .jump:hover { text-decoration: underline; }
+.synopsis { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 14px 16px; animation: rise .5s .08s var(--ease-out) both; transition: box-shadow .25s; }
+.synopsis h4, .brief .bh { margin: 0 0 6px; font: 700 11px/1 var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--nfk-green); }
+.synopsis p { margin: 0; color: #fff; font-size: 15px; line-height: 1.55; }
+.brief .bh { display: flex; align-items: center; gap: 10px; margin: 18px 0 10px; }
+.brief .bh::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, rgba(144,186,57,.6), rgba(255,255,255,0)); transform-origin: left; animation: grow .8s var(--ease-out) both; }
+@keyframes grow { from { transform: scaleX(0); } }
+.brief .note { margin: 0 0 10px; color: rgba(255,255,255,.8); font-size: 14px; }
+.stories.dim .story { opacity: .82; }
+.story .num { width: auto; min-width: 26px; padding: 0 5px; border-radius: 13px; }
+.areas { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.areas li { display: grid; grid-template-columns: 34px 1fr auto; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1); opacity: 0; animation: slideIn .5s var(--ease-out) forwards; animation-delay: calc(var(--i) * 70ms + .15s); transition: background .2s, box-shadow .25s; }
+.areas li:hover { background: rgba(255,255,255,.1); }
+@keyframes slideIn { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: none; } }
+.areas .ai { width: 34px; height: 34px; border-radius: 9px; background: rgba(144,186,57,.18); display: grid; place-items: center; }
+.areas .ai svg { width: 18px; height: 18px; fill: none; stroke: var(--nfk-green); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.areas b { color: #fff; font-size: 14px; }
+.areas p { margin: 2px 0 0; color: rgba(255,255,255,.82); font-size: 13.5px; line-height: 1.45; }
+.nums { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.num-chip { background: #fff; color: var(--ink, #1b2a3a); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; animation: rise .5s var(--ease-out) both; }
+.num-chip span { font-size: 12px; color: var(--muted, #5b6b7c); }
+.num-chip b { font: 700 20px/1.1 var(--display); color: var(--nfk-blue); }
+.num-chip i { font-style: normal; font-size: 12px; }
+.chg.good { color: #3d7a12; } .chg.bad { color: #b4372f; } .chg.flat { color: var(--muted, #5b6b7c); }
+.brief .speaking, .synopsis.speaking { box-shadow: 0 0 0 2px var(--nfk-green); }
+
+/* ---------- v3: EDA meetings ---------- */
+.next-card .nm { display: flex; gap: 14px; align-items: center; }
+.next-card .cal { width: 64px; border-radius: 10px; overflow: hidden; text-align: center; box-shadow: 0 4px 14px rgba(34,80,129,.18); flex: none; }
+.next-card .cal .m { background: var(--nfk-blue); color: #fff; font: 700 12px/24px var(--body); text-transform: uppercase; letter-spacing: .08em; }
+.next-card .cal .d { font: 800 30px/44px var(--display); color: var(--nfk-blue); background: #fff; }
+.next-card .days { font-size: 15px; margin-bottom: 4px; } .next-card .days b { font: 800 26px var(--display); color: var(--nfk-green-700, #5d8a1c); }
+.next-card .muted { font-size: 13px; line-height: 1.5; }
+.nm-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.mtgs { display: grid; gap: 12px; }
+.mtg { display: grid; grid-template-columns: 70px 1fr; gap: 16px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; position: relative; opacity: 0; animation: rise .5s var(--ease-out) forwards; animation-delay: calc(var(--i) * 80ms); transition: box-shadow .25s, transform .25s var(--ease-out); }
+.mtg:hover { box-shadow: 0 10px 24px rgba(34,80,129,.1); transform: translateY(-1px); }
+.mtg::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 3px; border-radius: 3px; background: linear-gradient(var(--nfk-green), var(--nfk-blue)); }
+.mtg-date { text-align: center; display: flex; flex-direction: column; }
+.mtg-date .m { font: 700 12px var(--body); text-transform: uppercase; color: var(--nfk-green-700, #5d8a1c); letter-spacing: .08em; }
+.mtg-date .d { font: 800 30px/1.05 var(--display); color: var(--nfk-blue); }
+.mtg-date .y { font-size: 12px; color: var(--muted, #5b6b7c); }
+.mtg-docs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; margin-bottom: 6px; }
+.mtg-docs .doc { padding: 3px 9px; border-radius: 99px; background: rgba(34,80,129,.08); color: var(--nfk-blue); font-weight: 600; text-decoration: none; }
+.mtg-docs .doc.minutes { background: rgba(144,186,57,.18); color: #3d6410; }
+.mtg p { margin: 0 0 6px; font-size: 14.5px; line-height: 1.55; }
+.mtg ul { margin: 4px 0 8px; padding-left: 18px; font-size: 13.5px; }
+.mtg-actions { display: flex; gap: 12px; align-items: center; }
+.btn.sm { padding: 5px 10px; font-size: 12.5px; }
+.btn.speaking-now { background: var(--nfk-green); color: var(--nfk-blue-900, #0f2741); border-color: var(--nfk-green); }
+.cards.two { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); }
+@media (max-width: 860px) {
+  .brief-top { grid-template-columns: 1fr; }
+  .refresh .cd { display: none; }
+  .cards.two { grid-template-columns: 1fr; }
+  .areas li { grid-template-columns: 30px 1fr; } .areas .jump { grid-column: 2; justify-self: start; }
+  .mtg { grid-template-columns: 54px 1fr; gap: 10px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .areas li, .mtg, .lead-chip, .synopsis, .num-chip { animation: none; opacity: 1; }
+  .brief .bh::after { animation: none; }
+  .refresh-btn.spin svg { animation: none; }
+}
