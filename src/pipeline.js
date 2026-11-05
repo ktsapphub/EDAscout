@@ -6,7 +6,7 @@ import { chat, budget as newBudget } from './llm.js';
 import { refreshMetrics, refreshAwards, storeMoney, trends } from './data.js';
 
 // Daily sources are re-read on every 6-hour refresh; weekly and monthly ones far less often.
-const OFF_TOPIC = /\b(shoot\w*|shot|shots|gunfire|gunshot\w*|murder\w*|homicide|kill(ed|ing|s)?|stabb\w*|arrest\w*|charged|charges|police|crash\w*|collision|injur\w*|dies|died|death|dead|missing|robber\w*|assault\w*|sentenced|jail|fire(fighters)?|blaze|drown\w*|weather|amber alert)\b/i;
+const OFF_TOPIC = /\b(shoot\w*|shot|shots|gunfire|gunshot\w*|murder\w*|homicide|kill(ed|ing|s)?|stabb\w*|arrest\w*|charged|charges|police|crash\w*|collision|injur\w*|dies|died|death|dead|missing|robber\w*|burglar\w*|theft|thefts|break-in|stolen|vandal\w*|assault\w*|sentenced|jail|fire(fighters)?|blaze|drown\w*|weather|amber alert)\b/i;
 const CADENCE_DAYS = { daily: 0.2, weekly: 6.5, monthly: 27 };
 
 export async function dueSources(env, force = false) {

@@ -154,7 +154,7 @@ function drawDashboard(d) {
         <div class="filters" role="toolbar" aria-label="Filter signals">${['All', ...new Set(d.signals.flatMap(s => (s.tags || '').split(',').filter(Boolean)))].slice(0, 9).map(t => `<button class="chip ${t === filter ? 'on' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>
         <div class="panel-body flush scroll"><div class="cards two" id="signalCards">${signalCards(d.signals)}</div></div>
       </section></div>` },
-    money: { title: `Money &amp; Housing · ${g}`, small: 'Dollar figures found in sources · federal awards in Norfolk', body: `<div class="grid">${moneyPanel(d)}${awardsPanel(d)}</div>` },
+    money: { title: `Money &amp; Housing · ${g}`, small: (d.awards || []).length ? 'Dollar figures found in sources · federal awards in Norfolk' : 'Dollar figures found in sources', body: `<div class="grid">${moneyPanel(d, !(d.awards || []).length)}${(d.awards || []).length ? awardsPanel(d) : ''}</div>` },
     cityhall: { title: 'City Hall &amp; Latest', body: `<div class="grid">
       <section class="panel span-6"><div class="panel-head"><h2>${ico('hall')}Norfolk City Hall</h2><span class="meta">Council, Planning &amp; boards</span></div>
         <div class="panel-body flush">${d.cityhall.length ? `<ul class="rows">${d.cityhall.map(r => `<li><button class="linkbtn" data-story="${r.id}">${esc(r.title)}</button><span class="s">${esc(r.summary || '')}${r.summary ? ' · ' : ''}found ${ago(r.found_at)}</span></li>`).join('')}</ul>` : '<p class="empty" style="padding:16px">No City Hall items in the latest update.</p>'}</div></section>
@@ -574,10 +574,10 @@ function outlookPanel(d, span = 'span-12') {
     </div></div></section>`;
 }
 
-function moneyPanel(d) {
+function moneyPanel(d, wide = false) {
   const totals = (d.money.totals || []).slice(0, 4);
   const items = d.money.items || [];
-  return `<section class="panel span-7"><div class="panel-head"><h2>${ico('coin')}Money tracker</h2><span class="meta">${GEO_NAMES[geo]} · last 90 days</span></div>
+  return `<section class="panel ${wide ? 'span-12' : 'span-7'}"><div class="panel-head"><h2>${ico('coin')}Money tracker</h2><span class="meta">${GEO_NAMES[geo]} · last 90 days</span></div>
     ${totals.length ? `<div class="panel-body" style="padding-bottom:0">${donut((d.money.totals || []).map(t => ({ name: t.kind, value: t.total })), { label: '90-day total' })}</div>` : ''}
     <div class="panel-body flush scroll" style="max-height:460px">${items.length ? items.map(m => `<div class="money-row">
       <div><div class="amt">${money(m.amount)}</div><span class="tag k">${esc(m.kind)}</span></div>

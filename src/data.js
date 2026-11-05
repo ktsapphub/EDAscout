@@ -115,7 +115,7 @@ export function extractMoney(text) {
     const unit = (m[2] || '').toLowerCase();
     if (unit.startsWith('b')) v *= 1e9; else if (unit === 'million' || unit === 'm') v *= 1e6; else if (unit === 'thousand' || unit === 'k') v *= 1e3;
     if (!isFinite(v) || v < 10000) continue;           // ignore small figures (fees, prices of single items)
-    const a = Math.max(0, s.lastIndexOf('. ', m.index) + 2);
+    const dot = s.lastIndexOf('. ', m.index), a = dot < 0 ? 0 : dot + 2;   // no earlier sentence: start at the beginning
     const bEnd = s.indexOf('. ', m.index);
     const sentence = s.slice(a, bEnd < 0 ? Math.min(s.length, m.index + 200) : bEnd + 1).trim().slice(0, 260);
     const kind = (KIND_RULES.find(([, re]) => re.test(sentence)) || ['mention'])[0];
