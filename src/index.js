@@ -83,6 +83,8 @@ async function route(req, env, ctx, url) {
   if (p === '/api/hit' && m === 'POST') return json(await hit(req, env));
   if (p === '/api/stats' && m === 'GET') return json(await stats(env, url.searchParams.get('range')));
   if (p === '/api/run' && m === 'POST') {
+    // An update cut off by a deploy or a closed tab never records its end; close those so they can't block or loop.
+    await env.DB.prepare("UPDATE runs SET finished_at = datetime('now'), ok = 0 WHERE finished_at IS NULL AND started_at < datetime('now','-15 minutes')").run();
     const running = await env.DB.prepare("SELECT id FROM runs WHERE finished_at IS NULL AND started_at >= datetime('now','-15 minutes') LIMIT 1").first();
     if (running) return json({ error: 'A scan is already running. Give it a minute.' }, 409);
     if (!(await isEditor(req, env)) && await limited(env, 'run', 1, 1200)) return json({ error: 'A scan ran in the last 20 minutes. Fresh results are already on the dashboard.' }, 429);
@@ -238,7 +240,7 @@ async function dashboard(env, geo) {
   if (cached) return cached;
   const db = env.DB, G = GEO_SQL[geo];
   const ITEM = `i.id, i.title, i.url, i.summary, i.why, i.score, i.type, i.tags, i.rule_hits, i.published_at, i.found_at, s.name AS source, s.geo`;
-  const [brief, signals, meetings, cityhall, latest, lastRun, counts, health, weekly, money, moneyTotals, awards, momentum, library, outlookRow, overviewRow] = await Promise.all([
+  const [brief, signals, meetings, cityhall, latest, lastRun, counts, health, weekly, money, moneyTotals, awards, momentum, library, outlookRow, overviewRow, lastOk] = await Promise.all([
     db.prepare("SELECT * FROM briefs WHERE kind = 'daily' ORDER BY period DESC LIMIT 1").first(),
     db.prepare(`SELECT ${ITEM}, g.status, g.rule_hit FROM signals g JOIN items i ON i.id = g.item_id JOIN sources s ON s.id = i.source_id
        WHERE g.status != 'dismissed' AND i.type NOT IN ('meeting','context') AND s.geo IN ${G} AND (i.published_at IS NULL OR i.published_at >= date('now','-180 days') OR g.status = 'pinned')
@@ -265,6 +267,7 @@ async function dashboard(env, geo) {
     db.prepare(`SELECT ${ITEM}, s.kind FROM items i JOIN sources s ON s.id = i.source_id WHERE i.type = 'context' ORDER BY s.tier, s.name LIMIT 24`).all(),
     db.prepare("SELECT body, created_at, model FROM briefs WHERE kind = 'eda_outlook' ORDER BY id DESC LIMIT 1").first(),
     db.prepare("SELECT body, created_at, model FROM briefs WHERE kind = ? ORDER BY period DESC LIMIT 1").bind(`overview_${geo}`).first(),
+    db.prepare("SELECT MAX(finished_at) FROM runs WHERE finished_at IS NOT NULL AND sources_ok > 0").first('MAX(finished_at)'),
   ]);
   const overview = overviewRow ? { ...safeParse(overviewRow.body), created: overviewRow.created_at, model: overviewRow.model } : null;
   const outlook = outlookRow ? { ...JSON.parse(outlookRow.body), created: outlookRow.created_at } : null;
@@ -296,7 +299,7 @@ async function dashboard(env, geo) {
     meetings: meetings.results.map(r => ({ ...r, actions: safeParse(r.actions) })),
     cityhall: cityhall.results,
     latest: latest.results,
-    lastRun, kpis: { ...counts, nextEda: nextFirstWednesday() }, health,
+    lastRun, lastOk, kpis: { ...counts, nextEda: nextFirstWednesday() }, health,
     money: { items: money.results, totals: moneyTotals.results },
     awards: awards.results,
     topics: { weeks, list: topics },

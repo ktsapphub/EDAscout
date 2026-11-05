@@ -18,6 +18,7 @@ export async function dueSources(env, force = false) {
 
 /** Full run. onProgress(event) receives small progress objects (used to stream "Run now" to the admin page). */
 export async function runDaily(env, { trigger = 'cron', force = false, onProgress = () => {} } = {}) {
+  await env.DB.prepare("UPDATE runs SET finished_at = datetime('now'), ok = 0 WHERE finished_at IS NULL AND started_at < datetime('now','-15 minutes')").run().catch(() => {});
   const run = await env.DB.prepare('INSERT INTO runs (kind, trigger) VALUES (?, ?) RETURNING id, started_at').bind('daily', trigger).first();
   const ctx = { runId: run.id, startedAt: run.started_at, budget: newBudget(env), newItems: 0, ok: 0, failed: 0 };
   const sources = await dueSources(env, force);

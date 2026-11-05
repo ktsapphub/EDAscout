@@ -121,7 +121,11 @@ async function renderDashboard(geoChange = false) {
   ticker(dash.latest);
   // No one should have to press a button for fresh data: if the last update is old (missed schedule), refresh in the background.
   const run = dash.lastRun;
-  if (!scanning && (!run || (run.finished_at && hoursSince(run.finished_at) > 7) || run.stale)) backgroundScan();
+  // At most one automatic try per browser every 30 minutes, and only when nothing has finished for 7 hours
+  // (prevents a refresh loop when an update is cut off or the server refuses a new one).
+  const lastAuto = +(store.get('autoScanAt') || 0);
+  const lastDone = dash.lastOk || run?.finished_at;
+  if (!scanning && hoursSince(lastDone) > 7 && Date.now() - lastAuto > 30 * 60e3) { store.set('autoScanAt', String(Date.now())); backgroundScan(); }
   if (geoChange) toast(`Showing ${GEO_NAMES[geo]}`);
 }
 
@@ -558,8 +562,10 @@ async function backgroundScan() {
   if (scanning) return;
   scanning = true; setStatus('live', 'Refreshing sources…'); $('#refreshBtn')?.classList.add('spin');
   try {
-    const res = await fetch('/api/run', { method: 'POST', credentials: 'same-origin' });
+    const ac = new AbortController(), timer = setTimeout(() => ac.abort(), 4 * 60e3);
+    const res = await fetch('/api/run', { method: 'POST', credentials: 'same-origin', signal: ac.signal });
     if (res.ok && res.body) { const r = res.body.getReader(); while (!(await r.read()).done) {} }
+    clearTimeout(timer);
   } catch { /* the cached data is still shown */ }
   scanning = false; $('#refreshBtn')?.classList.remove('spin');
   dash = null; trendData = null;
@@ -568,7 +574,7 @@ async function backgroundScan() {
 const hoursSince = d => d ? (Date.now() - toDate(d)) / 3600e3 : Infinity;
 $('#refreshBtn')?.addEventListener('click', async () => {
   const run = dash?.lastRun;
-  if (hoursSince(run?.finished_at) > 1) return backgroundScan();
+  if (!scanning && hoursSince(dash?.lastOk || run?.finished_at) > 1) return backgroundScan();
   const b = $('#refreshBtn'); b.classList.add('spin');
   dash = null; trendData = null;
   if (isHome()) await renderDashboard(); else location.hash = '#/';
