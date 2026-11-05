@@ -1,0 +1,25 @@
+# Opens the site as an iPhone and an Android phone, taps through the main features, and reports
+# errors, slow/frozen moments, unexpected re-renders and overflow. Screenshots and videos are attached.
+name: "Mobile · smoke test"
+run-name: "mobile smoke test · ${{ inputs.target || 'production' }}"
+on:
+  workflow_dispatch:
+    inputs:
+      target: { description: "production or staging", type: choice, options: [production, staging], default: production }
+permissions:
+  contents: read
+jobs:
+  mobile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: Install Playwright
+        run: npm i --no-save playwright@1 && npx playwright install --with-deps chromium
+      - name: Run
+        run: node tests/mobile-smoke.mjs "${{ inputs.target == 'staging' && 'https://edascout-staging.ktsapps.com' || 'https://edascout.ktsapps.com' }}" mobile-report
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: mobile-report, path: mobile-report, retention-days: 7 }
