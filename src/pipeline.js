@@ -12,7 +12,8 @@ const CADENCE_DAYS = { daily: 0.2, weekly: 6.5, monthly: 27 };
 export async function dueSources(env, force = false) {
   const { results } = await env.DB.prepare('SELECT * FROM sources WHERE active = 1 AND deleted_at IS NULL ORDER BY tier, id').all();
   if (force) return results;
-  return results.filter(s => !s.last_fetched || (Date.now() - Date.parse(s.last_fetched + 'Z')) / 864e5 >= (CADENCE_DAYS[s.cadence] ?? 0.8));
+  // Failed sources retry on the very next 6-hour run instead of waiting out their cadence.
+  return results.filter(s => !s.last_fetched || s.fail_count > 0 || (Date.now() - Date.parse(s.last_fetched + 'Z')) / 864e5 >= (CADENCE_DAYS[s.cadence] ?? 0.8));
 }
 
 /** Full run. onProgress(event) receives small progress objects (used to stream "Run now" to the admin page). */

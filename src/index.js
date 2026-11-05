@@ -68,7 +68,7 @@ async function route(req, env, ctx, url) {
   if ((mm = p.match(/^\/api\/item\/(\d+)$/)) && m === 'GET') return json(await itemDetail(env, +mm[1]));
   if (p === '/api/sources' && m === 'GET') {
     const { results } = await env.DB.prepare(`SELECT s.id, s.name, s.url, s.tier, s.kind, s.cadence, s.tags, s.keyword_filter, s.origin, s.active, s.deleted_at, s.geo,
-        s.last_fetched, s.last_new, s.last_error, s.fail_count, (SELECT COUNT(*) FROM items i WHERE i.source_id = s.id) AS item_count
+        s.last_fetched, s.last_ok, s.last_new, s.last_error, s.fail_count, (SELECT COUNT(*) FROM items i WHERE i.source_id = s.id) AS item_count
         FROM sources s ORDER BY s.deleted_at IS NOT NULL, s.tier, s.name`).all();
     return json(results);
   }
@@ -81,7 +81,7 @@ async function route(req, env, ctx, url) {
     return json(await ask(env, await req.json().catch(() => ({}))));
   }
   if (p === '/api/hit' && m === 'POST') return json(await hit(req, env));
-  if (p === '/api/stats' && m === 'GET') return json(await stats(env));
+  if (p === '/api/stats' && m === 'GET') return json(await stats(env, url.searchParams.get('range')));
   if (p === '/api/run' && m === 'POST') {
     const running = await env.DB.prepare("SELECT id FROM runs WHERE finished_at IS NULL AND started_at >= datetime('now','-15 minutes') LIMIT 1").first();
     if (running) return json({ error: 'A scan is already running. Give it a minute.' }, 409);
@@ -337,18 +337,32 @@ async function itemDetail(env, id) {
   };
 }
 
-// ---------- usage stats: unique browsers + page views; no IPs or raw ids stored ----------
+// ---------- usage stats: one site-wide count across Norfolk, Hampton Roads and Virginia; no IPs or raw ids stored ----------
+const RANGES = { '7': 7, '14': 14, '30': 30, '60': 60, '90': 90 };
 async function hit(req, env) {
-  const id = String((await req.json().catch(() => ({}))).vid || '');
-  if (!/^[\w-]{8,64}$/.test(id) || /bot|crawl|spider|monitor/i.test(req.headers.get('user-agent') || '')) return stats(env);
+  const body = await req.json().catch(() => ({}));
+  const id = String(body.vid || ''), geo = ['norfolk', 'region', 'state'].includes(body.geo) ? body.geo : 'norfolk';
+  const range = body.range;
+  if (!/^[\w-]{8,64}$/.test(id) || /bot|crawl|spider|monitor|headless/i.test(req.headers.get('user-agent') || '')) return stats(env, range);
   const vid = (await sha256(id)).slice(0, 24);
-  await env.DB.prepare("INSERT INTO visits (day, vid) VALUES (date('now'), ?) ON CONFLICT(day, vid) DO UPDATE SET views = views + 1").bind(vid).run();
-  return stats(env);
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO visits (day, vid) VALUES (date('now'), ?) ON CONFLICT(day, vid) DO UPDATE SET views = views + 1").bind(vid),
+    env.DB.prepare("INSERT INTO area_views (day, geo) VALUES (date('now'), ?) ON CONFLICT(day, geo) DO UPDATE SET views = views + 1").bind(geo),
+  ]);
+  return stats(env, range);
 }
-async function stats(env) {
-  const q = d => env.DB.prepare("SELECT COUNT(*) visitors, COALESCE(SUM(views),0) views FROM visits WHERE day >= date('now', ?)").bind(d).first();
-  const [today, week, month] = await Promise.all([q('+0 days'), q('-6 days'), q('-29 days')]);
-  return { today, week, month };
+async function stats(env, range = '7') {
+  const key = RANGES[range] ? range : range === 'ytd' ? 'ytd' : '7';
+  const from = key === 'ytd' ? `${new Date().getUTCFullYear()}-01-01` : new Date(Date.now() - (RANGES[key] - 1) * 864e5).toISOString().slice(0, 10);
+  const [tot, today, areas, daily] = await Promise.all([
+    env.DB.prepare('SELECT COUNT(DISTINCT vid) visitors, COALESCE(SUM(views),0) views FROM visits WHERE day >= ?').bind(from).first(),
+    env.DB.prepare("SELECT COUNT(*) visitors, COALESCE(SUM(views),0) views FROM visits WHERE day = date('now')").first(),
+    env.DB.prepare('SELECT geo, SUM(views) views FROM area_views WHERE day >= ? GROUP BY geo').bind(from).all(),
+    env.DB.prepare('SELECT day, COUNT(*) visitors, SUM(views) views FROM visits WHERE day >= ? GROUP BY day ORDER BY day').bind(from).all(),
+  ]);
+  const byArea = { norfolk: 0, region: 0, state: 0 };
+  for (const r of areas.results) byArea[r.geo] = r.views;
+  return { range: key, from, visitors: tot.visitors, views: tot.views, today, byArea, daily: daily.results };
 }
 
 // ---------- Ask ----------

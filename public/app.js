@@ -84,6 +84,7 @@ function placePill() {
 $$('.scope button').forEach(b => b.onclick = () => {
   if (b.dataset.geo === geo) return;
   geo = b.dataset.geo; store.set('geo', geo);
+  countView();
   $$('.scope button').forEach(x => x.setAttribute('aria-checked', x === b));
   placePill();
   dash = null; trendData = null; trendKey = null;
@@ -167,7 +168,7 @@ function drawDashboard(d) {
         <div class="lib">${d.library.map(r => `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title.slice(0, 90))}<span>${esc(r.source)}</span></a>`).join('') || '<p class="empty">Loads after the first update.</p>'}</div></section>
     </div>` },
   };
-  if (d.weekly) sections.weekly = { title: `Weekly Roll-up · ${esc(d.weekly.period)}`, body: `<div class="grid"><section class="panel span-12"><div class="panel-body"><div class="stories">${d.weekly.bullets.map((b, i) => storyCard(b, i, d)).join('')}</div></div></section></div>` };
+  if (d.weekly) sections.weekly = { title: `Weekly Roll-up · ${esc(d.weekly.period)}`, body: `<div class="grid"><section class="panel brief weekly span-12"><div class="panel-head"><h2>This week in review</h2><span class="meta">${d.weekly.bullets.length} stories · AI roll-up · tap a story for details</span></div><div class="panel-body"><div class="stories">${d.weekly.bullets.map((b, i) => storyCard(b, i, d)).join('')}</div></div></section></div>` };
   const L = layout(), order = [...L.order.filter(k => sections[k]), ...Object.keys(sections).filter(k => !L.order.includes(k))];
   const visible = order.filter(k => !L.hidden.includes(k));
   app.innerHTML = visible.map((k, i) => zone(k, sections[k], L.collapsed.includes(k), i, visible.length)).join('')
@@ -911,12 +912,14 @@ async function renderSources() {
   setStatus('idle', 'Sources');
   const me = await api('/api/me').catch(() => ({ editor: false }));
   app.innerHTML = `<div class="page-head"><div><h1>Sources</h1><p>Everything EDAScout reads. Anyone can run a fresh scan; adding, pausing or removing sources asks for the edit key.</p></div>
-    <div class="actions"><button class="btn" id="runNow">Run scan now</button><button class="btn primary" id="addBtn">+ Add source</button>${me.editor ? '<button class="btn" id="logout">Lock editing</button>' : ''}</div></div>
+    <div class="actions"><button class="btn" id="validateAll">Check all sources</button><button class="btn" id="runNow">Run scan now</button><button class="btn primary" id="addBtn">+ Add source</button>${me.editor ? '<button class="btn" id="logout">Lock editing</button>' : ''}</div></div>
     <div id="runLog"></div>
-    <div class="tabs" role="toolbar">${[['all', 'All'], ['norfolk', 'Norfolk'], ['region', 'Hampton Roads'], ['state', 'Virginia'], ['national', 'National'], ['paused', 'Paused'], ['removed', 'Removed']].map(([k, l]) => `<button class="chip ${k === tierTab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}<input id="q" placeholder="Search sources" aria-label="Search sources"></div>
-    <section class="panel"><div class="panel-body flush" style="overflow:auto"><table class="src-table"><thead><tr><th>Health</th><th>Source</th><th>Area</th><th>Type</th><th>Cadence</th><th>Last new</th><th>Active</th><th></th></tr></thead><tbody id="srcRows"><tr><td colspan="8"><div class="sk"></div><div class="sk"></div></td></tr></tbody></table></div></section>`;
+    <div class="sched-sum" id="schedSum"></div>
+    <div class="tabs" role="toolbar">${[['all', 'All'], ['norfolk', 'Norfolk'], ['region', 'Hampton Roads'], ['state', 'Virginia'], ['national', 'National'], ['problems', 'Needs attention'], ['paused', 'Paused'], ['removed', 'Removed']].map(([k, l]) => `<button class="chip ${k === tierTab ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}<input id="q" placeholder="Search sources" aria-label="Search sources"></div>
+    <section class="panel"><div class="panel-body flush" style="overflow:auto"><table class="src-table"><thead><tr><th>Auto-update</th><th>Source</th><th>Area</th><th>Type</th><th>Cadence</th><th>Last new</th><th>Active</th><th></th></tr></thead><tbody id="srcRows"><tr><td colspan="8"><div class="sk"></div><div class="sk"></div></td></tr></tbody></table></div></section>`;
   $('#addBtn').onclick = () => openDrawer();
   $('#runNow').onclick = runNow;
+  $('#validateAll').onclick = validateAll;
   $('#q').oninput = drawRows;
   if ($('#logout')) $('#logout').onclick = async () => { await api('/api/logout', { method: 'POST' }); toast('Editing locked'); renderSources(); };
   $$('[data-tab]').forEach(b => b.onclick = () => { tierTab = b.dataset.tab; $$('[data-tab]').forEach(x => x.classList.toggle('on', x === b)); drawRows(); });
@@ -924,14 +927,64 @@ async function renderSources() {
   drawRows();
 }
 
-function health(s) {
-  if (s.kind === 'reference') return ['g', 'Linked reference (not fetched)'];
-  if (s.deleted_at || !s.active) return ['n', 'Paused'];
-  if (!s.last_fetched) return ['n', 'Not scanned yet'];
-  if (s.fail_count >= 3) return ['r', s.last_error || 'Failing'];
-  if (s.fail_count > 0) return ['a', s.last_error || 'Last fetch failed'];
-  return ['g', 'Healthy'];
+function drawSchedSum() {
+  const live = sources.filter(s => !s.deleted_at), st = live.map(schedule);
+  const n = k => st.filter(x => x.k === k && !['Link only', 'Paused'].includes(x.label)).length;
+  const on = st.filter(x => x.label === 'On schedule').length, links = st.filter(x => x.label === 'Link only').length, paused = st.filter(x => x.label === 'Paused').length;
+  const bad = n('r'), warn = n('a'), auto = live.length - links - paused;
+  $('#schedSum').innerHTML = `<div class="ss-bar" role="img" aria-label="${on} of ${auto} auto-updating sources on schedule"><i class="g" style="flex:${on}"></i><i class="a" style="flex:${warn}"></i><i class="r" style="flex:${bad}"></i></div>
+    <div class="ss-txt"><b>${on} of ${auto}</b> auto-updating sources are on schedule${warn ? ` · <span class="a">${warn} need a look</span>` : ''}${bad ? ` · <span class="r">${bad} failing or overdue</span>` : ''} · ${links} link-only · ${paused} paused.
+    <span class="muted">Sources are read every 6 hours (daily), weekly or monthly, by cadence.</span>${bad + warn ? ' <button class="linkbtn" id="showProblems">Show them</button>' : ''}</div>`;
+  $('#showProblems')?.addEventListener('click', () => { tierTab = 'problems'; $$('[data-tab]').forEach(x => x.classList.toggle('on', x.dataset.tab === 'problems')); drawRows(); });
 }
+
+/** Read every active source now (without saving) to prove it still returns items; results show on each row. */
+async function validateAll() {
+  const btn = $('#validateAll'), list = sources.filter(s => !s.deleted_at && s.active && s.kind !== 'reference');
+  if (!list.length) return;
+  try { await edit(() => api('/api/me').then(m => { if (!m.editor) throw Object.assign(new Error('edit'), { code: 'edit-key' }); })); } catch (e) { if (e.message !== 'Edit cancelled') toast(e.message); return; }
+  btn.disabled = true; let done = 0, ok = 0;
+  list.forEach(s => (validation[s.id] = { state: 'run' })); drawRows();
+  const worker = async () => {
+    while (list.length) {
+      const s = list.shift();
+      try {
+        const r = await api(`/api/sources/${s.id}/test`, { method: 'POST' });
+        const n = r.candidates?.length ?? 0;
+        validation[s.id] = n ? { state: 'ok', text: `✓ Reads fine · ${n} item${n > 1 ? 's' : ''} found` } : { state: 'bad', text: '⚠ Reads, but found no items (check the page or keyword filter)' };
+        if (n) ok++;
+      } catch (e) { validation[s.id] = { state: 'bad', text: `✗ ${e.message}` }; }
+      btn.textContent = `Checking… ${++done}`;
+      drawRows();
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  btn.disabled = false; btn.textContent = 'Check all sources';
+  toast(`${ok} of ${done} sources read correctly right now`);
+}
+
+// Auto-update check: each source should be read on the 6-hour schedule according to its cadence.
+const CADENCE_DAYS = { daily: 0.2, weekly: 6.5, monthly: 27 };
+const nextSlot = t => { const d = new Date(t); d.setUTCMinutes(0, 0, 0); d.setUTCHours(Math.ceil((t / 3600e3 - Math.floor(t / 864e5) * 24) / 6) * 6); return Math.max(d.getTime(), t); };
+function schedule(s) {
+  if (s.deleted_at) return { k: 'n', label: 'Removed', detail: '' };
+  if (s.kind === 'reference') return { k: 'g', label: 'Link only', detail: 'Linked, never fetched (by design)' };
+  if (!s.active) return { k: 'n', label: 'Paused', detail: 'Not updating until switched on' };
+  if (!s.last_fetched) return { k: 'a', label: 'Waiting', detail: 'Not read yet; picked up on the next update' };
+  const last = toDate(s.last_fetched).getTime(), due = last + (CADENCE_DAYS[s.cadence] ?? 0.2) * 864e5;
+  const next = nextSlot(due), late = Date.now() - next > 45 * 60e3;
+  if (s.fail_count >= 3) return { k: 'r', label: 'Failing', detail: `${s.fail_count} failed reads in a row: ${s.last_error || 'error'}`, next };
+  if (s.fail_count > 0) { const retry = nextSlot(Date.now()); return { k: 'a', label: 'Last read failed', detail: `${s.last_error || 'error'}. Retries ${fmtWhen(retry)}`, next: retry }; }
+  if (late) return { k: 'r', label: 'Overdue', detail: `Should have updated ${fmtWhen(next)}`, next };
+  return { k: 'g', label: 'On schedule', detail: `Read ${ago(s.last_fetched)} · next ${fmtWhen(next)}`, next };
+}
+function fmtWhen(t) {
+  const m = Math.round((t - Date.now()) / 60e3);
+  if (Math.abs(m) < 2) return 'now';
+  if (m < 0) return `${ago(new Date(t).toISOString().slice(0, 19).replace('T', ' '))}`;
+  return m < 60 ? `in ${m} min` : m < 1440 ? `in ${Math.round(m / 60)} h` : `in ${Math.round(m / 1440)} d`;
+}
+const validation = {}; // id -> { state: 'run' | 'ok' | 'bad', text }
 
 function drawRows() {
   const q = ($('#q')?.value || '').toLowerCase();
@@ -939,14 +992,15 @@ function drawRows() {
     if (tierTab === 'removed') return !!s.deleted_at;
     if (s.deleted_at) return false;
     if (tierTab === 'paused') return !s.active;
+    if (tierTab === 'problems') return ['r', 'a'].includes(schedule(s).k);
     if (tierTab !== 'all' && s.geo !== tierTab) return false;
     return true;
   }).filter(s => !q || `${s.name} ${s.url} ${s.tags}`.toLowerCase().includes(q));
   $('#srcRows').innerHTML = list.length ? list.map(s => {
-    const [h, ht] = health(s);
-    return `<tr data-id="${s.id}" class="${s.deleted_at ? 'deleted' : ''}">
-      <td><span class="health ${h}" title="${esc(ht)}"></span><span class="muted" style="font-size:12px">${esc(h === 'g' ? (s.kind === 'reference' ? 'Link' : 'OK') : h === 'n' ? '—' : 'Check')}</span></td>
-      <td><b>${esc(s.name)}</b> ${s.origin === 'recommended' ? '<span class="tag rule">recommended</span>' : s.origin === 'added' ? '<span class="tag">added</span>' : ''}<a class="u" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a>${s.fail_count && s.kind !== 'reference' ? `<span class="u" style="color:var(--nfk-alert)">${esc(s.last_error || '')}</span>` : ''}</td>
+    const sc = schedule(s), v = validation[s.id];
+    return `<tr data-id="${s.id}" class="${s.deleted_at ? 'deleted' : ''} ${sc.k === 'r' ? 'needs' : ''}">
+      <td class="sched"><span class="health ${sc.k}"></span><b>${esc(sc.label)}</b><span class="sd">${esc(sc.detail)}</span>${v ? `<span class="vres ${v.state}">${v.state === 'run' ? 'Checking…' : esc(v.text)}</span>` : ''}</td>
+      <td><b>${esc(s.name)}</b> ${s.origin === 'recommended' ? '<span class="tag rule">recommended</span>' : s.origin === 'added' ? '<span class="tag">added</span>' : ''}<a class="u" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a></td>
       <td>${esc({ norfolk: 'Norfolk', region: 'Hampton Roads', state: 'Virginia', national: 'National' }[s.geo] || s.geo)}</td><td>${esc(s.kind)}</td><td>${esc(s.cadence)}</td>
       <td class="muted">${s.last_new ? ago(s.last_new) : '—'}<br><span style="font-size:12px">${s.item_count} items</span></td>
       <td>${s.deleted_at ? '' : `<button class="toggle" data-act="toggle" aria-pressed="${!!s.active}" aria-label="Active"></button>`}</td>
@@ -954,6 +1008,7 @@ function drawRows() {
     </tr>`;
   }).join('') : '<tr><td colspan="8" class="empty">No sources here.</td></tr>';
   $$('#srcRows [data-act]').forEach(b => b.onclick = () => rowAction(b));
+  drawSchedSum();
 }
 
 async function rowAction(b) {
@@ -1100,17 +1155,34 @@ async function renderModels() {
   });
 }
 
-// ---------------- usage widget: counts this browser once per page load, refreshes every 2 min ----------------
-function drawUsage(s) {
-  if (!s?.today) return;
-  $$('#usage [data-u]').forEach(el => { const [a, b] = el.dataset.u.split('.'); el.textContent = Number(s[a]?.[b] ?? 0).toLocaleString('en-US'); });
-  $('#usage').hidden = false;
-}
-(function usage() {
+// ---------------- usage widget: one site-wide count across all three areas ----------------
+let usageRange = ['7', '14', '30', '60', '90', 'ytd'].includes(store.get('usageRange')) ? store.get('usageRange') : '7';
+function usageVid() {
   let vid = store.get('eda_vid');
   if (!vid) { vid = (crypto.randomUUID?.() || Math.random().toString(36).slice(2) + Date.now().toString(36)); store.set('eda_vid', vid); }
-  api('/api/hit', { method: 'POST', body: { vid } }).then(drawUsage).catch(() => {});
-  setInterval(() => document.hidden || api('/api/stats').then(drawUsage).catch(() => {}), 120000);
+  return vid;
+}
+function drawUsage(s) {
+  if (!s || s.visitors == null) return;
+  const set = (k, v) => { const el = $(`#usage [data-u="${k}"]`); if (el) countUp(el, Number(v) || 0, n => Math.round(n).toLocaleString('en-US')); };
+  set('visitors', s.visitors); set('views', s.views); set('today', s.today?.visitors);
+  const lab = (k, one, many, n) => { const el = $(`#usage [data-u="${k}"] + span`); if (el) el.textContent = n === 1 ? one : many; };
+  lab('visitors', 'visitor', 'visitors', s.visitors); lab('views', 'page view', 'page views', s.views); lab('today', 'visitor today', 'visitors today', s.today?.visitors);
+  const a = s.byArea || {}, tot = (a.norfolk || 0) + (a.region || 0) + (a.state || 0);
+  $('#usageSplit').innerHTML = tot ? [['norfolk', 'Norfolk', CAT[0]], ['region', 'Hampton Roads', CAT[1]], ['state', 'Virginia', CAT[2]]]
+    .map(([k, l, c]) => `<span title="${l}: ${(a[k] || 0).toLocaleString('en-US')} area views"><i style="background:${c}"></i>${l} <b>${Math.round((a[k] || 0) / tot * 100)}%</b></span>`).join('') : '<span class="muted">No area views yet</span>';
+  const pts = s.daily || [];
+  const max = Math.max(1, ...pts.map(p => p.views));
+  $('#usageSpark').innerHTML = pts.length > 1 ? `<path d="${pts.map((p, i) => `${i ? 'L' : 'M'}${(i / (pts.length - 1) * 160).toFixed(1)},${(34 - p.views / max * 30).toFixed(1)}`).join('')}" fill="none" stroke="#2F6DB0" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` : '';
+  $('#usage').hidden = false;
+}
+const loadUsage = () => api(`/api/stats?range=${usageRange}`).then(drawUsage).catch(() => {});
+function countView() { api('/api/hit', { method: 'POST', body: { vid: usageVid(), geo, range: usageRange } }).then(drawUsage).catch(() => {}); }
+(function usage() {
+  const sel = $('#usageRange');
+  if (sel) { sel.value = usageRange; sel.onchange = () => { usageRange = sel.value; store.set('usageRange', usageRange); loadUsage(); }; }
+  countView();
+  setInterval(() => document.hidden || loadUsage(), 120000);
 })();
 
 router();
