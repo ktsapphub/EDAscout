@@ -8,7 +8,7 @@ const report = [];
 const browser = await chromium.launch();
 for (const name of ['iPhone 14', 'Pixel 7']) {
   const ctx = await browser.newContext({ ...devices[name], recordVideo: { dir: `${out}/video-${name.replace(/\W/g, '')}` } });
-  const page = await ctx.newPage();
+  const page = await ctx.newPage(); page.setDefaultTimeout(15000);
   const r = { device: name, errors: [], console: [], requests: {}, steps: [] };
   page.on('pageerror', e => r.errors.push(String(e.stack || e).slice(0, 400)));
   page.on('console', m => m.type() === 'error' && r.console.push(m.text().slice(0, 200)));
