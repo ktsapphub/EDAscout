@@ -13,7 +13,7 @@ let dash = null, trendData = null, filter = 'All', trendGroup = 'All', trendKey 
 async function api(path, opts = {}) {
   const res = await fetch(path, { credentials: 'same-origin', headers: { 'content-type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.message || data.error || `HTTP ${res.status}`), { status: res.status, code: data.error });
+  if (!res.ok) throw Object.assign(new Error(data.message || data.error || data.answer || `HTTP ${res.status}`), { status: res.status, code: data.error });
   return data;
 }
 /** Run an edit action; if the server wants the edit key, ask once, then retry. */
@@ -295,6 +295,29 @@ function meetingGroups(d) {
     return gp;
   });
 }
+/** Past first-Wednesday EDA meetings (last 6 months) with no minutes/details uploaded yet. */
+function pendingMeetings(groups) {
+  const today = new Date(Date.now() - 4 * 3600e3).toISOString().slice(0, 10), out = [];
+  const minutesFor = new Set(groups.filter(g => g.docs.some(x => x.doc_kind === 'minutes') && g.date).map(g => g.date.slice(0, 7)));
+  const anyFor = new Set(groups.filter(g => g.date).map(g => g.date.slice(0, 7)));
+  const n = new Date();
+  for (let back = 0; back < 6; back++) {
+    const d = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() - back, 1));
+    while (d.getUTCDay() !== 3) d.setUTCDate(d.getUTCDate() + 1);
+    const iso = d.toISOString().slice(0, 10);
+    if (iso < today && !minutesFor.has(iso.slice(0, 7))) out.push({ date: iso, hasAgenda: anyFor.has(iso.slice(0, 7)) });
+  }
+  return out;
+}
+function pendingCard(p, i) {
+  const t = toDate(p.date);
+  return `<article class="mtg pending" style="--i:${i}">
+    <div class="mtg-date"><span class="m">${t.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })}</span><span class="d">${t.getUTCDate()}</span><span class="y">${t.getUTCFullYear()}</span></div>
+    <div class="mtg-body"><div class="mtg-docs"><span class="pend-chip">Minutes pending</span></div>
+      <p>This meeting has taken place, but ${p.hasAgenda ? 'only the agenda' : 'no agenda or minutes'} ${p.hasAgenda ? 'is' : 'are'} posted so far. Minutes are usually approved at the next meeting. EDAScout will fill this in automatically after its next scan finds them.</p>
+      <div class="mtg-actions"><a class="btn sm" href="https://norfolkdevelopment.com/target-industries/the-norfolk-economic-development-authority/" target="_blank" rel="noopener">Check the EDA page ↗</a></div></div>
+  </article>`;
+}
 function meetingSpeech(gp) {
   return `E.D.A. meeting, ${gp.date ? fmtDate(gp.date) : 'undated'}. ${gp.synopsis} ${gp.actions.length ? 'Items: ' + gp.actions.map(a => a.item + (val(a.outcome) ? `, ${a.outcome}` : '')).join('. ') + '.' : ''}`;
 }
@@ -309,7 +332,7 @@ function outlookSpeech(o) {
 function edaZone(d) {
   const nextEda = d.kpis.nextEda, dt = nextEda ? toDate(nextEda) : null;
   const days = dt ? Math.max(0, Math.ceil((dt - Date.now()) / 864e5)) : null;
-  const groups = meetingGroups(d);
+  const groups = meetingGroups(d), pending = pendingMeetings(groups);
   return `<div class="grid">
       <section class="panel span-4 next-card">
         <div class="panel-head"><h2>${ico('cal')}Next meeting</h2></div>
@@ -323,7 +346,7 @@ function edaZone(d) {
       </section>
       ${outlookPanel(d, 'span-8')}
       <section class="panel span-12"><div class="panel-head"><h2>${ico('book')}Previous meetings</h2><span class="meta">${groups.length} meeting${groups.length === 1 ? '' : 's'} · quick synopsis · tap Listen to hear it</span></div>
-        <div class="panel-body">${groups.length ? `<div class="mtgs">${groups.map((gp, i) => {
+        <div class="panel-body">${pending.length ? `<div class="mtgs pend-list" aria-label="Meetings awaiting minutes">${pending.map(pendingCard).join('')}</div>` : ''}${groups.length ? `<div class="mtgs">${groups.map((gp, i) => {
           const t = gp.date ? toDate(gp.date) : null;
           return `<article class="mtg" style="--i:${i}">
             <div class="mtg-date">${t ? `<span class="m">${t.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })}</span><span class="d">${t.getUTCDate()}</span><span class="y">${t.getUTCFullYear()}</span>` : '<span class="m">—</span>'}</div>
@@ -802,14 +825,33 @@ function askKey() {
 }
 
 // ---------------- Listen ----------------
+// Reliability notes: iOS Safari only speaks after a tap, so unlockSpeech() runs inside the tap handler; Chrome silently
+// stops long utterances, so text is spoken in short sentence chunks; voices load late, so they are cached on voiceschanged.
+let voicePick = null;
+const pickVoice = () => voicePick ||= speechSynthesis.getVoices().find(v => /en-US/.test(v.lang) && /natural|neural|samantha|google us/i.test(v.name)) || null;
+if ('speechSynthesis' in window) { speechSynthesis.onvoiceschanged = () => { voicePick = null; pickVoice(); }; pickVoice(); }
+function unlockSpeech() {
+  if (!('speechSynthesis' in window)) return;
+  const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u);
+}
+const chunkText = t => (t.match(/[^.!?;:]+[.!?;:]?\s*/g) || [t]).reduce((a, s) => {
+  if (a.length && (a.at(-1) + s).length < 160) a[a.length - 1] += s; else a.push(s); return a;
+}, []).map(s => s.trim()).filter(Boolean);
 function speakText(text, { onstart, onend } = {}) {
-  if (!('speechSynthesis' in window)) { toast('Your browser cannot read aloud.'); return; }
-  const u = new SpeechSynthesisUtterance(text.replace(/\bEDA\b/g, 'E.D.A.').replace(/\bNRHA\b/g, 'N.R.H.A.'));
-  u.rate = 1.02; u.lang = 'en-US';
-  const v = speechSynthesis.getVoices().find(v => /en-US/.test(v.lang) && /natural|neural|samantha|google us/i.test(v.name));
-  if (v) u.voice = v;
-  u.onstart = onstart; u.onend = onend; u.onerror = onend;
-  speechSynthesis.speak(u);
+  if (!('speechSynthesis' in window)) { toast('Your browser cannot read aloud.'); onend?.(); return; }
+  const chunks = chunkText(text.replace(/\bEDA\b/g, 'E.D.A.').replace(/\bNRHA\b/g, 'N.R.H.A.'));
+  if (!chunks.length) { onend?.(); return; }
+  const v = pickVoice();
+  chunks.forEach((c, i) => {
+    const u = new SpeechSynthesisUtterance(c);
+    u.rate = 1.02; u.lang = 'en-US';
+    if (v) u.voice = v;
+    if (i === 0) u.onstart = onstart;
+    if (i === chunks.length - 1) { u.onend = onend; }
+    u.onerror = e => { if (e.error !== 'interrupted' && e.error !== 'canceled') speechSynthesis.cancel(); if (i === chunks.length - 1 || (e.error !== 'interrupted' && e.error !== 'canceled')) onend?.(); };
+    speechSynthesis.speak(u);
+  });
+  if (speechSynthesis.paused) speechSynthesis.resume();
 }
 /** Read a list of parts aloud; the button toggles to Stop; the part being read is highlighted. */
 function speakParts(parts, btn) {
@@ -843,7 +885,7 @@ async function ask(q, spoken = false) {
     pending.innerHTML = `${esc(r.answer)}${r.sources.length ? `<div class="srcs">${r.sources.map(s => s.id ? `<button class="linkbtn" data-story="${s.id}" style="text-align:left">${esc(s.source)}: ${esc(s.title.slice(0, 80))}</button>` : `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)} ↗</a>`).join('')}</div>` : ''}`;
     $$('[data-story]', pending).forEach(b => b.onclick = () => openStory(+b.dataset.story));
     if (spoken) { const orb = $('#askMic'); speakText(r.answer, { onstart: () => orb.classList.add('speaking'), onend: () => orb.classList.remove('speaking') }); }
-  } catch (e) { pending.textContent = e.message; }
+  } catch (e) { pending.textContent = e.status === 429 ? e.message : 'Sorry, that took too long. Please ask again.'; }
   log.scrollTop = log.scrollHeight;
 }
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -855,7 +897,7 @@ $('#askMic').onclick = () => {
   rec.onend = () => orb.classList.remove('listening');
   rec.onerror = () => orb.classList.remove('listening');
   rec.onresult = e => ask(e.results[0][0].transcript, true);
-  speechSynthesis?.cancel(); rec.start();
+  speechSynthesis?.cancel(); unlockSpeech(); rec.start();
 };
 
 // ---------------- Sources ----------------
@@ -1052,5 +1094,18 @@ async function renderModels() {
     } catch (e) { if (e.message !== 'Edit cancelled') toast(e.message); }
   });
 }
+
+// ---------------- usage widget: counts this browser once per page load, refreshes every 2 min ----------------
+function drawUsage(s) {
+  if (!s?.today) return;
+  $$('#usage [data-u]').forEach(el => { const [a, b] = el.dataset.u.split('.'); el.textContent = Number(s[a]?.[b] ?? 0).toLocaleString('en-US'); });
+  $('#usage').hidden = false;
+}
+(function usage() {
+  let vid = store.get('eda_vid');
+  if (!vid) { vid = (crypto.randomUUID?.() || Math.random().toString(36).slice(2) + Date.now().toString(36)); store.set('eda_vid', vid); }
+  api('/api/hit', { method: 'POST', body: { vid } }).then(drawUsage).catch(() => {});
+  setInterval(() => document.hidden || api('/api/stats').then(drawUsage).catch(() => {}), 120000);
+})();
 
 router();

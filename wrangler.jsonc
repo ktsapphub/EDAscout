@@ -32,6 +32,20 @@
     "APP_URL": "https://edascout.ktsapps.com",
     "MAX_LLM_CALLS_PER_RUN": "40",
     "MAX_ITEMS_PER_SOURCE": "8"
+  },
+  // Staging: own Worker, own D1 + KV (never the production ones). Create the two resources, paste the ids, then
+  // `npx wrangler d1 migrations apply edascout-staging --remote --env staging`. Deployed by pushing the `staging` branch.
+  "env": {
+    "staging": {
+      "name": "edascout-staging",
+      "routes": [{ "pattern": "edascout-staging.ktsapps.com", "custom_domain": true }],
+      "d1_databases": [{ "binding": "DB", "database_name": "edascout-staging", "database_id": "REPLACE_WITH_STAGING_D1_ID", "migrations_dir": "migrations" }],
+      "kv_namespaces": [{ "binding": "KV", "id": "REPLACE_WITH_STAGING_KV_ID" }],
+      "ai": { "binding": "AI" },
+      "browser": { "binding": "BROWSER" },
+      "triggers": { "crons": [] },
+      "vars": { "APP_URL": "https://edascout-staging.ktsapps.com", "MAX_LLM_CALLS_PER_RUN": "40", "MAX_ITEMS_PER_SOURCE": "8" }
+    }
   }
   // Optional secrets (any subset, never committed): OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, GROQ_API_KEY, ANTHROPIC_API_KEY
 }
