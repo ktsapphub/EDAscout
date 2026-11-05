@@ -228,7 +228,7 @@ async function dashboard(env, geo) {
     db.prepare("SELECT * FROM briefs WHERE kind = 'daily' ORDER BY period DESC LIMIT 1").first(),
     db.prepare(`SELECT ${ITEM}, g.status, g.rule_hit FROM signals g JOIN items i ON i.id = g.item_id JOIN sources s ON s.id = i.source_id
        WHERE g.status != 'dismissed' AND i.type NOT IN ('meeting','context') AND s.geo IN ${G} AND (i.published_at IS NULL OR i.published_at >= date('now','-180 days') OR g.status = 'pinned')
-       ORDER BY (g.status = 'pinned') DESC, i.found_at >= datetime('now','-2 days') DESC, i.score DESC LIMIT 30`).all(),
+       ORDER BY (g.status = 'pinned') DESC, COALESCE(i.published_at, i.found_at) DESC, i.score DESC LIMIT 30`).all(),
     db.prepare(`SELECT m.body, m.doc_kind, m.meeting_date, m.doc_url, m.actions, m.created_at, i.id, i.summary, i.why, i.title FROM meetings m LEFT JOIN items i ON i.id = m.item_id
        ORDER BY m.meeting_date DESC, m.id DESC LIMIT 8`).all(),
     db.prepare(`SELECT ${ITEM} FROM items i JOIN sources s ON s.id = i.source_id WHERE s.kind = 'cityhall' ORDER BY i.found_at DESC, i.id DESC LIMIT 12`).all(),

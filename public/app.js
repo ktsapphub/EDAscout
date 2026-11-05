@@ -149,7 +149,7 @@ function drawDashboard(d) {
     trends: { title: `Trends · ${g}`, small: 'Source: FRED · tap a card for the full chart', body: trendsBlock() },
     signals: { title: `Signals · ${g}`, small: 'Scored 0–100 for relevance to Norfolk economic development', body: `<div class="grid">
       <section class="panel span-12 ${d.signals.some(s => isFresh(s.found_at)) ? 'has-new' : ''}">
-        <div class="panel-head"><h2>${ico('radar')}Signal Board</h2><span class="meta">${d.signals.length} active · ${g}</span></div>
+        <div class="panel-head"><h2>${ico('radar')}Signal Board</h2><span class="meta">${d.signals.length} active · ${g} · newest first</span></div>
         ${scoreHistogram(d.signals)}
         <div class="filters" role="toolbar" aria-label="Filter signals">${['All', ...new Set(d.signals.flatMap(s => (s.tags || '').split(',').filter(Boolean)))].slice(0, 9).map(t => `<button class="chip ${t === filter ? 'on' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>
         <div class="panel-body flush scroll"><div class="cards two" id="signalCards">${signalCards(d.signals)}</div></div>
@@ -206,8 +206,11 @@ function buildBrief(d, ms) {
   const sigs = d.signals, fresh = sigs.filter(s => isFresh(s.found_at)).length;
   const ranked = [...sigs].sort((a, b) => b.score - a.score);
   const TOP_BAR = 75;
-  const top85 = ranked.filter(s => s.score >= TOP_BAR).slice(0, 6);
-  const closest = top85.length ? [] : ranked.slice(0, 3);
+  // Top signals rotate with the news: only the last 30 days, newest first.
+  const when = x => toDate(x.published_at || x.found_at)?.getTime() || 0;
+  const recentSig = sigs.filter(x => Date.now() - when(x) < 30 * 864e5);
+  const top85 = recentSig.filter(s => s.score >= TOP_BAR).sort((a, b) => when(b) - when(a) || b.score - a.score).slice(0, 6);
+  const closest = top85.length ? [] : [...recentSig].sort((a, b) => b.score - a.score).slice(0, 3).sort((a, b) => when(b) - when(a));
 
   const totals = d.money.totals || [], total = totals.reduce((a, t) => a + t.total, 0), mentions = totals.reduce((a, t) => a + t.n, 0);
   const lp = pickM(ms, 'list_price'), dom = pickM(ms, 'dom');
@@ -261,8 +264,8 @@ function briefPanel(d, B) {
       <button class="listen" id="listen"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg><span class="wave"><i></i><i></i><i></i><i></i></span><span class="lt">Listen</span></button>
     </div>
     <div class="panel-body">
-      <div class="brief-top">${lead}<div class="synopsis" data-say="syn"><h4>Synopsis</h4><p>${esc(B.synopsis)}</p></div></div>
-      <h4 class="bh"><span>Top signals · score 75+</span></h4>${top}
+      <div class="brief-top">${lead}<div class="synopsis" data-say="syn"><h4>Synopsis${d.overview?.created ? ` <span class="syn-when">· updated ${ago(d.overview.created)}</span>` : ''}</h4><p>${esc(B.synopsis)}</p></div></div>
+      <h4 class="bh"><span>Top signals · score 75+ · newest first</span></h4>${top}
       <h4 class="bh"><span>Area by area</span></h4>
       <ol class="areas">${B.areas.map((a, i) => `<li data-say="area${i}" style="--i:${i}"><span class="ai">${ico(a.icon)}</span><div><b>${esc(a.label)}</b><p>${esc(a.line)}</p></div><button class="jump" data-jump="${a.id}" aria-label="Go to ${esc(a.label)}">View ↓</button></li>`).join('')}</ol>
       ${B.keyMetrics.length ? `<h4 class="bh"><span>The numbers</span></h4><div class="nums">${B.keyMetrics.map(m => `<div class="num-chip"><span>${esc(m.label)}</span><b>${fmtVal(m.latest.v, m.unit)}</b><i class="chg ${['flat', 'good', 'bad'][[0, 1, -1].indexOf(direction(m))]}">${esc(chgWords(m) || fmtDate(m.latest.d))}</i></div>`).join('')}</div>` : ''}
@@ -534,7 +537,9 @@ function storyCard(b, i, d) {
 }
 
 function signalCards(list) {
-  const shown = list.filter(s => filter === 'All' || (s.tags || '').split(',').includes(filter));
+  const when = x => toDate(x.published_at || x.found_at)?.getTime() || 0;
+  const shown = list.filter(s => filter === 'All' || (s.tags || '').split(',').includes(filter))
+    .sort((a, b) => (b.status === 'pinned') - (a.status === 'pinned') || when(b) - when(a) || b.score - a.score);
   if (!shown.length) return `<p class="empty" style="padding:16px">${list.length ? 'No signals with this tag.' : `No signals for ${GEO_NAMES[geo]} yet.`}</p>`;
   return shown.map((s, i) => {
     const rule = s.rule_hit || (s.rule_hits || '').split(',')[0];

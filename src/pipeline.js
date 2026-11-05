@@ -41,7 +41,8 @@ export async function runDaily(env, { trigger = 'cron', force = false, onProgres
   onProgress({ type: 'phase', phase: 'summarizing' });
   await summarizeNew(env, ctx);
   onProgress({ type: 'phase', phase: 'brief' });
-  const brief = await writeDailyBrief(env, ctx);
+  // The on-page brief is built from live data, so the old AI daily brief is no longer written (saves daily AI calls).
+  const brief = null;
   try { if (await writeEdaOutlook(env, ctx, { force })) onProgress({ type: 'data', name: 'EDA Outlook (last meeting + what is next)', ok: 1 }); } catch (e) { onProgress({ type: 'data', name: 'EDA Outlook', error: String(e.message || e) }); }
   try { const n = await writeOverviews(env, ctx); onProgress({ type: 'data', name: 'Area briefs (Norfolk, Hampton Roads, Virginia)', ok: n }); } catch (e) { onProgress({ type: 'data', name: 'Area briefs', error: String(e.message || e) }); }
   const now = new Date();
@@ -392,34 +393,57 @@ function fmtMetric(m) {
 
 export async function overviewFacts(env, geo) {
   const G = GEO_IN[geo];
-  const [ms, sig, money, recent] = await Promise.all([
+  const [ms, newest, money, recent] = await Promise.all([
     trends(env, geo),
-    env.DB.prepare(`SELECT i.title, i.score FROM items i JOIN sources s ON s.id = i.source_id WHERE i.type NOT IN ('context','meeting') AND s.geo IN ${G}
-      AND (i.published_at IS NULL OR i.published_at >= date('now','-30 days')) ORDER BY i.score DESC LIMIT 5`).all(),
+    // Newest relevant stories first, so the synopsis moves as sources bring in news.
+    env.DB.prepare(`SELECT i.title, i.score, COALESCE(i.published_at, i.found_at) d FROM items i JOIN sources s ON s.id = i.source_id
+      WHERE i.type NOT IN ('context','meeting') AND s.geo IN ${G} AND i.score >= 50 AND COALESCE(i.published_at, i.found_at) >= date('now','-14 days')
+      ORDER BY COALESCE(i.published_at, i.found_at) DESC, i.score DESC LIMIT 6`).all(),
     env.DB.prepare(`SELECT mo.kind, COUNT(*) n, SUM(mo.amount) total FROM money mo JOIN items i ON i.id = mo.item_id JOIN sources s ON s.id = i.source_id
       WHERE mo.found_at >= datetime('now','-90 days') AND s.geo IN ${G} AND (i.published_at IS NULL OR i.published_at >= date('now','-365 days')) GROUP BY mo.kind ORDER BY total DESC LIMIT 3`).all(),
     env.DB.prepare(`SELECT COUNT(*) n FROM items i JOIN sources s ON s.id = i.source_id WHERE i.type != 'context' AND s.geo IN ${G} AND i.found_at >= datetime('now','-7 days')`).first('n'),
   ]);
-  return [
-    ...ms.map(fmtMetric),
-    `Stories found in the last 7 days: ${recent}`,
-    ...sig.results.map(r => `Story (relevance ${r.score}/100): ${r.title}`),
-    ...money.results.map(r => `Dollar figures in sources, last 90 days, ${r.kind}: $${Math.round(r.total).toLocaleString('en-US')} across ${r.n} mentions`),
-  ];
+  return {
+    ms, newest: newest.results,
+    lines: [
+      ...ms.map(fmtMetric),
+      `Stories found in the last 7 days: ${recent}`,
+      ...newest.results.map(r => `New story (${String(r.d).slice(0, 10)}, relevance ${r.score}/100): ${r.title}`),
+      ...money.results.map(r => `Dollar figures in sources, last 90 days, ${r.kind}: $${Math.round(r.total).toLocaleString('en-US')} across ${r.n} mentions`),
+    ],
+  };
 }
 
-export async function writeOverviews(env, ctx) {
+/** Plain synopsis from the same facts, used when the AI is unavailable or over its daily limit, so the text never goes stale. */
+function rulesSynopsis(geo, { ms, newest }) {
+  const dir = ms.filter(m => m.better !== 'neutral' && m.change != null && Math.abs(m.pct ?? m.change) >= 0.05);
+  const good = dir.filter(m => (m.change > 0) === (m.better === 'up')).map(m => m.label.toLowerCase());
+  const bad = dir.filter(m => (m.change > 0) !== (m.better === 'up')).map(m => m.label.toLowerCase());
+  const list = a => a.length > 1 ? `${a.slice(0, -1).join(', ')} and ${a.at(-1)}` : a[0];
+  const parts = [];
+  if (good.length) parts.push(`In ${GEO_LABEL[geo]}, ${list(good)} improved over the past year`);
+  if (bad.length) parts.push(`${good.length ? 'while' : `In ${GEO_LABEL[geo]},`} ${list(bad)} weakened`);
+  let text = parts.length ? parts.join(' ') + '.' : `${GEO_LABEL[geo]}'s indicators were mostly flat over the past year.`;
+  if (newest[0]) text += ` Newest development: ${newest[0].title}.`;
+  return text;
+}
+
+export async function writeOverviews(env, ctx, { force = false } = {}) {
   let n = 0;
   for (const geo of ['norfolk', 'region', 'state']) {
     const facts = await overviewFacts(env, geo);
-    if (facts.length < 2) continue;
+    if (facts.lines.length < 2) continue;
+    // Rewrite only when the stories or numbers behind it changed: fresh whenever sources update, no wasted AI calls otherwise.
+    const sig = (await sha256(facts.lines.join('\n'))).slice(0, 16);
+    const prev = await env.DB.prepare("SELECT body FROM briefs WHERE kind = ? ORDER BY period DESC LIMIT 1").bind(`overview_${geo}`).first('body');
+    if (!force && prev && JSON.parse(prev).sig === sig) continue;
     const out = await chat(env, 'summarize', [
-      { role: 'system', content: 'You write a 3-sentence economic synopsis for a city economic development board. Use only the facts given. Plain words, no hype, no bullet points, no numbers that are not in the facts. Say what is improving, what is weakening, and one thing to watch. Each fact says whether it is an improvement or a deterioration; follow those labels exactly and never reverse them.' },
-      { role: 'user', content: `Area: ${GEO_LABEL[geo]}\nFacts:\n- ${facts.join('\n- ')}` },
+      { role: 'system', content: 'You write a 3-sentence economic synopsis for a city economic development board. Use only the facts given. Plain words, no hype, no bullet points, no numbers that are not in the facts. Say what is improving, what is weakening, and the most important new development from the newest stories. Each fact says whether it is an improvement or a deterioration; follow those labels exactly and never reverse them.' },
+      { role: 'user', content: `Area: ${GEO_LABEL[geo]}\nFacts:\n- ${facts.lines.join('\n- ')}` },
     ], { maxTokens: 220, budget: ctx?.budget });
-    if (!out?.text) continue;
+    const text = out?.text?.trim() || rulesSynopsis(geo, facts);
     await env.DB.prepare("INSERT INTO briefs (kind, period, body, model) VALUES (?,?,?,?) ON CONFLICT(kind, period) DO UPDATE SET body = excluded.body, model = excluded.model, created_at = datetime('now')")
-      .bind(`overview_${geo}`, today(), JSON.stringify({ text: out.text.trim() }), out.model).run();
+      .bind(`overview_${geo}`, today(), JSON.stringify({ text, sig, ai: !!out?.text }), out?.model || 'rules').run();
     n++;
   }
   return n;

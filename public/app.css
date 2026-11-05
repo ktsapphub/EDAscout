@@ -650,3 +650,4 @@ input::placeholder, textarea::placeholder { color: var(--ink-2); -webkit-text-fi
 /* ---------- staging sandbox banner ---------- */
 .staging-bar { position: sticky; top: 0; z-index: 60; background: repeating-linear-gradient(135deg, #C97A1E 0 14px, #b86d16 14px 28px); color: #fff; font-size: 13px; text-align: center; padding: 6px 12px; }
 .staging-bar a { color: #fff; text-decoration: underline; margin-left: 6px; }
+.synopsis .syn-when { text-transform: none; letter-spacing: 0; font-weight: 500; color: rgba(255,255,255,.65); }

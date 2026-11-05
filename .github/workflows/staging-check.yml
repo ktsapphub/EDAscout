@@ -3,6 +3,8 @@ name: "Staging · health check"
 run-name: "staging health check"
 on:
   workflow_dispatch:
+    inputs:
+      refresh: { description: "Also run a fresh scan on staging first", type: boolean, default: false }
 permissions:
   contents: read
 jobs:
@@ -16,6 +18,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
+      - name: "Refresh staging data (optional)"
+        if: inputs.refresh
+        run: curl -s -X POST https://edascout-staging.ktsapps.com/api/run | tail -c 400; echo
       - name: "Check pages and API"
         run: |
           for host in edascout-staging.ktsapps.com edascout.ktsapps.com; do
