@@ -421,7 +421,12 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          if timeout 900 npx --yes wrangler@4 deploy --dry-run --outdir "$RUNNER_TEMP/wrangler-dry" 2>&1 | tee "$RUNNER_TEMP/deploycheck.log"; then
+          # Install the app's own packages first, the same way Cloudflare's build does; otherwise any npm import
+          # (for example @cloudflare/puppeteer) looks "missing" and a good change is wrongly blocked.
+          if [ -f package.json ]; then
+            if [ -f package-lock.json ]; then npm ci --no-audit --no-fund || npm install --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+          fi
+          if timeout 900 npx --yes wrangler@4 deploy --dry-run --env=""  --outdir "$RUNNER_TEMP/wrangler-dry" 2>&1 | tee "$RUNNER_TEMP/deploycheck.log"; then
             echo "ok=1" >> "$GITHUB_OUTPUT"; echo "Builds and bundles cleanly."
           else
             echo "ok=0" >> "$GITHUB_OUTPUT"
@@ -506,7 +511,11 @@ jobs:
       - name: "Hub · mark a failed agent run"
         if: always() && (steps.verdict.outputs.ok != '1' || steps.deploycheck.outputs.ok == '0')
         run: |
-          echo "::error::The agent didn't finish (${{ steps.claude.outcome }})."
+          if [ "${{ steps.verdict.outputs.ok }}" = "1" ]; then
+            echo "::error::The agent finished, but the deploy check failed, so no PR was opened. The work is saved on branch hub/${RUN_ID}; see 'Vision · will it deploy?' for the error."
+          else
+            echo "::error::The agent didn't finish (${{ steps.claude.outcome }})."
+          fi
           exit 1
 
       - name: "Report to hub"
