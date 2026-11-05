@@ -575,3 +575,36 @@ table.src-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 
 #modal header .sub a { color: #fff; text-decoration: underline; text-underline-offset: 2px; }
 .histo svg { height: auto; max-height: 110px; }
+
+/* ---------- v4: Safari / mobile colour safety ---------- */
+/* Force light rendering: iOS Safari auto-darkens form controls and buttons, giving white text on white cards. */
+:root { color-scheme: only light; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; background: var(--page); }
+button, input, select, textarea { color: inherit; }
+input, select, textarea { color: var(--ink); -webkit-text-fill-color: var(--ink); opacity: 1; font-size: max(16px, 1em); }
+input::placeholder, textarea::placeholder { color: var(--ink-2); -webkit-text-fill-color: var(--ink-2); opacity: .8; }
+.ticker { -webkit-mask-image: linear-gradient(90deg, transparent, #000 4%, #000 96%, transparent); }
+.modal-back { -webkit-backdrop-filter: blur(3px); }
+@media (max-width: 720px) {
+  /* never leave content hidden waiting for a scroll-reveal or animation that Safari may skip */
+  .reveal .panel, .reveal .kpis, .reveal .metric, .mtg, .card, .story, .msg, .ol-list li { opacity: 1 !important; transform: none !important; }
+}
+
+/* ---------- v4: ticker auto-scroll on touch devices ---------- */
+/* Hover pause only where a real pointer exists: iOS keeps :hover after a tap and froze the ticker. */
+.ticker:hover .ticker-track { animation-play-state: running; }
+@media (hover: hover) { .ticker:hover .ticker-track { animation-play-state: paused; } }
+@media (max-width: 720px) {
+  /* runs even with Reduce Motion on: the owner asked for an always-moving mobile ticker */
+  .ticker-track { animation: marquee 55s linear infinite !important; will-change: transform; }
+}
+
+/* ---------- v4: meetings awaiting minutes + usage widget ---------- */
+.mtg.pending { background: var(--nfk-alert-50); border-style: dashed; }
+.mtg.pending::before { background: var(--nfk-alert); }
+.pend-list { margin-bottom: 12px; }
+.pend-chip { padding: 3px 9px; border-radius: 99px; background: #fff; color: #9a3b26; border: 1px solid var(--nfk-alert); font-weight: 600; }
+.usage { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: center; font-size: 12.5px; color: var(--ink-2); margin-bottom: 12px; padding: 8px 12px; background: #fff; border: 1px solid var(--line); border-radius: 10px; }
+.usage[hidden] { display: none; }
+.usage b { color: var(--ink); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.usage .u-title { font-weight: 600; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; color: var(--nfk-blue); }

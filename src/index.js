@@ -80,6 +80,8 @@ async function route(req, env, ctx, url) {
     if (await limited(env, `ask:${ip(req)}`, 20, 3600)) return json({ answer: "You've asked a lot this hour. Try again in a bit.", sources: [] }, 429);
     return json(await ask(env, await req.json().catch(() => ({}))));
   }
+  if (p === '/api/hit' && m === 'POST') return json(await hit(req, env));
+  if (p === '/api/stats' && m === 'GET') return json(await stats(env));
   if (p === '/api/run' && m === 'POST') {
     const running = await env.DB.prepare("SELECT id FROM runs WHERE finished_at IS NULL AND started_at >= datetime('now','-15 minutes') LIMIT 1").first();
     if (running) return json({ error: 'A scan is already running. Give it a minute.' }, 409);
@@ -335,20 +337,44 @@ async function itemDetail(env, id) {
   };
 }
 
+// ---------- usage stats: unique browsers + page views; no IPs or raw ids stored ----------
+async function hit(req, env) {
+  const id = String((await req.json().catch(() => ({}))).vid || '');
+  if (!/^[\w-]{8,64}$/.test(id) || /bot|crawl|spider|monitor/i.test(req.headers.get('user-agent') || '')) return stats(env);
+  const vid = (await sha256(id)).slice(0, 24);
+  await env.DB.prepare("INSERT INTO visits (day, vid) VALUES (date('now'), ?) ON CONFLICT(day, vid) DO UPDATE SET views = views + 1").bind(vid).run();
+  return stats(env);
+}
+async function stats(env) {
+  const q = d => env.DB.prepare("SELECT COUNT(*) visitors, COALESCE(SUM(views),0) views FROM visits WHERE day >= date('now', ?)").bind(d).first();
+  const [today, week, month] = await Promise.all([q('+0 days'), q('-6 days'), q('-29 days')]);
+  return { today, week, month };
+}
+
 // ---------- Ask ----------
+const STOP = new Set('what when where which with about there that this have does from norfolk any the and for are was were did last new tell how many much who why can you our their they them has had been will would could should into than then also just more most some over under between during'.split(' '));
+const stem = w => w.replace(/(ing|ed|es|s)$/, '');
+const dayOf = s => String(s || '').slice(0, 10);
+
 async function ask(env, { q }) {
-  const question = String(q || '').trim().slice(0, 300);
+  const question = String(q || '').trim().replace(/\s+/g, ' ').slice(0, 300);
   if (!question) return { answer: 'Ask me about Norfolk economic development.', sources: [] };
-  const words = [...new Set(question.toLowerCase().match(/[a-z0-9$]{3,}/g) || [])]
-    .filter(w => !['what', 'when', 'where', 'which', 'with', 'about', 'there', 'that', 'this', 'have', 'does', 'from', 'norfolk', 'any', 'the', 'and', 'for', 'are', 'was', 'were', 'did', 'last', 'new', 'tell', 'how', 'many', 'much'].includes(w)).slice(0, 6);
+  const ck = `ask:${(await sha256(question.toLowerCase())).slice(0, 32)}`;
+  const hot = await env.KV.get(ck, 'json').catch(() => null);
+  if (hot) return hot;
+
+  const words = [...new Set((question.toLowerCase().match(/[a-z0-9$]{3,}/g) || []).filter(w => !STOP.has(w)).map(stem).filter(w => w.length >= 3))].slice(0, 8);
   let rows = [];
   if (words.length) {
-    const where = words.map(() => "(LOWER(i.title) LIKE ? OR LOWER(COALESCE(i.summary, i.raw_excerpt, '')) LIKE ?)").join(' OR ');
-    ({ results: rows } = await env.DB.prepare(`SELECT i.id, i.title, i.url, COALESCE(i.summary, SUBSTR(i.raw_excerpt, 1, 400)) AS text, i.found_at, s.name AS source FROM items i JOIN sources s ON s.id = i.source_id
-       WHERE ${where} ORDER BY i.found_at DESC, i.score DESC LIMIT 8`).bind(...words.flatMap(w => [`%${w}%`, `%${w}%`])).all());
+    // Rank by distinct question words matched (title counts double), then recency.
+    const rank = words.map(() => "((LOWER(i.title) LIKE ?) * 2 + (LOWER(COALESCE(i.summary,'') || ' ' || COALESCE(i.raw_excerpt,'')) LIKE ?))").join(' + ');
+    ({ results: rows } = await env.DB.prepare(`SELECT * FROM (SELECT i.id, i.title, i.url, SUBSTR(COALESCE(i.summary, i.raw_excerpt, ''), 1, 700) AS text, i.why, i.found_at, i.published_at, i.score, s.name AS source, (${rank}) AS rel
+       FROM items i JOIN sources s ON s.id = i.source_id) WHERE rel > 0 ORDER BY rel DESC, found_at DESC, score DESC LIMIT 8`)
+      .bind(...words.flatMap(w => [`%${w}%`, `%${w}%`])).all());
   }
-  if (/eda|meeting|approv|minutes|agenda/i.test(question)) {
-    const { results } = await env.DB.prepare(`SELECT i.id, i.title, i.url, COALESCE(i.summary, '') AS text, i.found_at, 'Norfolk EDA' AS source FROM meetings m JOIN items i ON i.id = m.item_id ORDER BY m.meeting_date DESC LIMIT 3`).all();
+  if (/\beda\b|meeting|approv|minutes|agenda|board/i.test(question)) {
+    const { results } = await env.DB.prepare(`SELECT i.id, i.title, i.url, SUBSTR(COALESCE(i.summary, i.raw_excerpt, ''), 1, 900) AS text, i.why, i.found_at, m.meeting_date AS published_at, 'Norfolk EDA ' || m.doc_kind AS source
+       FROM meetings m JOIN items i ON i.id = m.item_id ORDER BY m.meeting_date DESC, m.id DESC LIMIT 4`).all();
     rows = [...results, ...rows.filter(r => !results.some(x => x.id === r.id))].slice(0, 8);
   }
   // Trend questions: add the latest numbers.
@@ -365,15 +391,22 @@ async function ask(env, { q }) {
       facts += t.map(x => `${geoName(geo)} ${x.label}: ${fmtVal(x.latest.v, x.unit)} (${x.latest.d})${x.change != null ? x.unit === '%' ? `, ${x.change >= 0 ? 'up' : 'down'} ${Math.abs(x.change).toFixed(1)} points from a year earlier` : `, ${x.pct >= 0 ? 'up' : 'down'} ${Math.abs(x.pct).toFixed(1)}% from a year earlier` : ''}`).join('\n') + (t.length ? '\n' : '');
     }
   }
-  if (!rows.length && !facts) return { answer: "I don't have that in the sources I track yet.", sources: [] };
-  const out = await chat(env, 'voice', [
-    { role: 'system', content: 'You answer questions about Norfolk, Virginia economic development for a civic audience, in at most 3 short sentences suitable for reading aloud. Use only the items and figures given. If they do not answer the question, say so. Do not invent numbers or names.' },
-    { role: 'user', content: `Question: ${question}\n\n${facts ? `Figures (FRED):\n${facts}\n` : ''}Items:\n${rows.map(r => `[${r.id}] ${r.source}: ${r.title}. ${r.text}`).join('\n')}` },
-  ], {});
-  return {
+  if (!rows.length && !facts) return { answer: "I don't have that in the sources I track yet. Try naming a topic, project or meeting.", sources: [] };
+
+  // Bounded latency: a slow model must not leave the user waiting; fall back to the cited items.
+  const out = await Promise.race([
+    chat(env, 'voice', [
+      { role: 'system', content: `You answer questions about Norfolk, Virginia economic development for a civic audience. Today is ${new Date().toISOString().slice(0, 10)}. Reply in at most 3 short plain sentences suitable for reading aloud, no lists or markdown. Use ONLY the items and figures provided; copy numbers and names exactly. Prefer the most recent item. Name the source and date when it helps. If they do not answer the question, say what they do cover. Never invent anything.` },
+      { role: 'user', content: `Question: ${question}\n\n${facts ? `Figures (FRED):\n${facts}\n` : ''}Items (best match first):\n${rows.map(r => `[${r.id}] ${r.source}, ${dayOf(r.published_at || r.found_at)}: ${r.title}. ${r.text}${r.why ? ` Why it matters: ${r.why}` : ''}`).join('\n')}` },
+    ], { maxTokens: 220 }).catch(() => null),
+    new Promise(r => setTimeout(() => r(null), 9000)),
+  ]);
+  const res = {
     answer: out?.text?.trim() || (rows.length ? `Here's what I found: ${rows.slice(0, 3).map(r => r.title).join('; ')}.` : facts.split('\n')[0]),
     sources: [...rows.slice(0, 5).map(r => ({ id: r.id, title: r.title, url: r.url, source: r.source })), ...(facts ? [{ title: 'Federal Reserve Economic Data', url: 'https://fred.stlouisfed.org/', source: 'FRED' }] : [])],
   };
+  if (out?.text) await env.KV.put(ck, JSON.stringify(res), { expirationTtl: 900 }).catch(() => {});
+  return res;
 }
 const geoName = g => ({ norfolk: 'Norfolk', region: 'Hampton Roads', state: 'Virginia' }[g]);
 const fmtVal = (v, u) => u === '$' ? `$${Math.round(v).toLocaleString('en-US')}` : u === '%' ? `${v.toFixed(1)}%` : u === 'k' ? `${v.toFixed(1)}k` : Math.round(v).toLocaleString('en-US');
