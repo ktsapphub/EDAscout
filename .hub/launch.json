@@ -1,0 +1,15 @@
+{
+  "slug": "edascout",
+  "production": "https://edascout.ktsapps.com",
+  "staging": "https://edascout-staging.ktsapps.com",
+  "secrets": [
+    { "name": "GEMINI_API_KEY", "purpose": "Optional AI fallback (summaries, extraction)", "where": "aistudio.google.com → API keys", "required": false },
+    { "name": "OPENAI_API_KEY", "purpose": "Optional AI fallback (extraction)", "where": "platform.openai.com → API keys", "required": false }
+  ],
+  "checks": [
+    { "path": "/", "expect": 200 },
+    { "path": "/api/me", "expect": 200, "contains": "\"env\":\"production\"" },
+    { "path": "/api/dashboard?geo=norfolk", "expect": 200, "contains": "\"signals\"" },
+    { "path": "/api/stats?range=7", "expect": 200, "contains": "\"visitors\"" }
+  ]
+}

@@ -2,19 +2,19 @@
 
 A daily, source-linked command view of Norfolk economic development: EDA agendas and minutes, City Hall meetings, deals, properties, grants and regional signals. Every summary links to its original.
 
-**Live:** https://edascout.ktsapps.com (private by default; sign in with your owner key)
+**Live:** https://edascout.ktsapps.com (open to everyone) · **Sandbox:** https://edascout-staging.ktsapps.com
+
+Full spec: [docs/agents/edascout-spec.md](docs/agents/edascout-spec.md).
 
 ## What it does
 
-- **Scans every morning at 6:00 AM ET** (10:00 UTC cron). Unchanged pages are skipped, so a quiet day costs almost nothing.
-- **Today's Brief:** up to 5 bullets, each linked to its sources. **Listen** reads it aloud using your browser's own voice (free).
-- **Signal Board:** items ranked 0–100 by Norfolk relevance, industry fit, dollars/jobs/square feet, and timeliness. Pin or dismiss.
-- **EDA Watch:** next meeting (first Wednesday, noon) and the latest agendas/minutes, with dollar amounts and votes pulled from the PDFs.
-- **City Hall Feed:** Council, Planning Commission, EDA, NRHA and related board meetings from iQM2.
-- **Weekly roll-up:** written on Mondays.
-- **Ask:** type or speak a question; answers come only from tracked sources, with links.
-- **Sources** page: add any public page, RSS feed or PDF (with a live preview), pause, edit, remove (with undo), "Test now", health dots, and **Run scan now** with live progress.
-- **Models** page: no job is tied to one AI vendor. Each job tries the cheapest model first (Cloudflare Workers AI, included in the Workers plan) and moves to the next only if the answer fails a check. Daily call caps per job.
+- **Refreshes every 6 hours** (00/06/12/18 UTC); the header counts down to the next update. Unchanged pages are skipped.
+- **Today's Brief** per area (Norfolk, Hampton Roads, Virginia): AI synopsis that updates as sources update, top signals (score 75+, newest first), a line per section, key numbers. **Listen** reads it aloud.
+- **EDA Board Meetings:** next meeting, EDA Outlook (last meeting, in motion, likely next), meetings awaiting minutes, and previous meetings with spoken synopses. Scanned minutes are read with OCR.
+- **Trends** (FRED) with full charts, **Signals**, **Money & Housing**, **City Hall & Latest**, **What's heating up**, **Weekly roll-up**. Sections can be moved, collapsed or hidden.
+- **Ask:** type or speak; answers only from tracked sources, with links.
+- **Sources** page with an auto-update check per source and "Check all sources".
+- **Site usage** across all areas with a 7/14/30/60/90-day or year-to-date selector.
 
 ## Stack
 
@@ -24,13 +24,14 @@ One Cloudflare Worker (`src/`) serves the static dashboard (`public/`) and the A
 | --- | --- |
 | `DB` | D1 `edascout` (schema in `migrations/`) |
 | `KV` | `edascout-cache` (dashboard cache, robots.txt cache) |
-| `AI` | Workers AI (summaries, PDF reading via `toMarkdown`, Ask) |
+| `AI` | Workers AI (summaries, synopsis, PDF reading, OCR of scanned minutes, Ask) |
+| `BROWSER` | Browser Rendering (blocked sites, PDFs, scanned-page rendering) |
 
 No build step and no framework.
 
 ## Deploys
 
-Pushes to `main` deploy automatically through **Cloudflare Workers Builds** (Cloudflare dashboard → Workers & Pages → edascout → Settings → Build, connected to this repo). Deploy command: `npx wrangler deploy`.
+Mission Control's **Mission Control Deploy** workflow deploys `main` → production and `staging` → the sandbox. Test on staging first. Reset the sandbox's data with **Staging · copy production data** (GitHub → Actions).
 
 Database changes: add a new file in `migrations/` and run `npm run db:migrate` (or apply it in the D1 console).
 
@@ -40,9 +41,9 @@ The app runs on Workers AI alone. To let a job fall back to another provider, ad
 
 `GEMINI_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `GROQ_API_KEY`, `ANTHROPIC_API_KEY`, or `AI_BASE_URL` + `OMNIROUTE_API_KEY` for OmniRoute.
 
-## Owner key
+## Edit key
 
-The owner key is stored only as a SHA-256 hash in D1 (`prefs.admin_key_hash`). To change it:
+Viewing is open to everyone; only source and model changes need the edit key. It is stored only as a SHA-256 hash in D1 (`prefs.admin_key_hash`). To change it:
 
 ```sql
 INSERT OR REPLACE INTO prefs (key, value) VALUES ('admin_key_hash', '<sha256 of the new key>');
