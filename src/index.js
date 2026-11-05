@@ -230,7 +230,7 @@ async function dashboard(env, geo) {
        WHERE g.status != 'dismissed' AND i.type NOT IN ('meeting','context') AND s.geo IN ${G} AND (i.published_at IS NULL OR i.published_at >= date('now','-180 days') OR g.status = 'pinned')
        ORDER BY (g.status = 'pinned') DESC, COALESCE(i.published_at, i.found_at) DESC, i.score DESC LIMIT 30`).all(),
     db.prepare(`SELECT m.body, m.doc_kind, m.meeting_date, m.doc_url, m.actions, m.created_at, i.id, i.summary, i.why, i.title FROM meetings m LEFT JOIN items i ON i.id = m.item_id
-       ORDER BY m.meeting_date DESC, m.id DESC LIMIT 8`).all(),
+       WHERE m.meeting_date IS NULL OR m.meeting_date >= date('now','-13 months') ORDER BY m.meeting_date DESC, m.id DESC LIMIT 30`).all(),
     db.prepare(`SELECT ${ITEM} FROM items i JOIN sources s ON s.id = i.source_id WHERE s.kind = 'cityhall' ORDER BY i.found_at DESC, i.id DESC LIMIT 12`).all(),
     db.prepare(`SELECT ${ITEM} FROM items i JOIN sources s ON s.id = i.source_id WHERE i.type NOT IN ('context') AND s.geo IN ${G} ORDER BY i.found_at DESC, i.score DESC LIMIT 40`).all(),
     db.prepare("SELECT *, CASE WHEN finished_at IS NULL AND started_at < datetime('now','-15 minutes') THEN 1 ELSE 0 END AS stale FROM runs ORDER BY id DESC LIMIT 1").first(),

@@ -70,6 +70,9 @@ export async function processSource(env, src, ctx, { dryRun = false } = {}) {
       return { ok: true, newItems: added ? 1 : 0 };
     }
     if (!(await robotsAllows(env, url))) throw new Error('Blocked by robots.txt');
+    // Meeting sources: also read agendas/minutes that were linked before but never processed (self-healing backlog).
+    let backfilled = 0;
+    if (src.kind === 'meetings' && !dryRun) backfilled = await backfillMeetings(env, src, ctx).catch(() => 0);
     const firstRun = !src.last_hash;
     let r;
     try {
@@ -82,9 +85,9 @@ export async function processSource(env, src, ctx, { dryRun = false } = {}) {
       }
       throw e;
     }
-    if (r.status === 304) { if (!dryRun) await markOk(env, src, {}); return { ok: true, newItems: 0 }; }
+    if (r.status === 304) { if (!dryRun) await markOk(env, src, { newItems: backfilled }); return { ok: true, newItems: backfilled }; }
     const hash = await sha256(r.isBinary ? r.body : r.body);
-    if (!dryRun && hash === src.last_hash) { await markOk(env, src, { etag: r.etag, lastModified: r.lastModified }); return { ok: true, newItems: 0 }; }
+    if (!dryRun && hash === src.last_hash) { await markOk(env, src, { etag: r.etag, lastModified: r.lastModified, newItems: backfilled }); return { ok: true, newItems: backfilled }; }
 
     const method = src.method === 'auto' ? detectMethod(r) : src.method;
     let cands = buildCandidates(src, r, method, url);
@@ -135,6 +138,7 @@ export async function processSource(env, src, ctx, { dryRun = false } = {}) {
       if (await insertItem(env, src, c, ctx)) added++;
     }
 
+    added += backfilled;
     await markOk(env, src, { etag: r.etag, lastModified: r.lastModified, hash, newItems: added });
     return { ok: true, newItems: added };
   } catch (e) {
@@ -199,6 +203,32 @@ export async function pdfToText(env, buf) {
 }
 
 const BODY_NAMES = [['iqm2', 'City Council'], ['nrha', 'NRHA'], ['norfolkdevelopment', 'EDA']];
+
+/** Up to `limit` linked-but-unread agendas/minutes from the last 13 months, newest first. */
+async function backfillMeetings(env, src, ctx, limit = 8) {
+  const { results } = await env.DB.prepare(`SELECT sl.url FROM seen_links sl WHERE sl.source_id = ? AND lower(sl.url) LIKE '%.pdf%'
+      AND (lower(sl.url) LIKE '%agenda%' OR lower(sl.url) LIKE '%minute%' OR lower(sl.url) LIKE '%mintue%')
+      AND NOT EXISTS (SELECT 1 FROM meetings m WHERE m.doc_url = sl.url)`).bind(src.id).all();
+  const cutoff = new Date(Date.now() - 400 * 864e5).toISOString().slice(0, 10);
+  const docs = results.map(r => ({ url: r.url, title: decodeURIComponent(r.url.split('/').pop()).replace(/[-_]+/g, ' ').replace(/\.pdf.*$/i, ''), nearDate: fixYear(r.url) }))
+    .filter(d => d.nearDate && d.nearDate >= cutoff)
+    .sort((a, b) => b.nearDate.localeCompare(a.nearDate)).slice(0, limit);
+  let n = 0;
+  for (const d of docs) if (await handleMeetingDoc(env, src, d, ctx)) n++;
+  return n;
+}
+/** Date from the file name, with the year corrected from the upload folder (/uploads/2026/02/) when the name has a typo. */
+function fixYear(url) {
+  const d = dateFromText(url.split('/').pop().replace(/(\d)(st|nd|rd|th)\b/gi, '$1').replace(/[-_]+/g, ' '));
+  const up = url.match(/uploads\/(\d{4})\/(\d{2})\//);
+  if (!d || !up) return d;
+  const upYear = +up[1], upMonth = +up[2], m = +d.slice(5, 7);
+  const year = m <= upMonth ? upYear : upYear - 1;   // a document is uploaded after its meeting
+  if (+d.slice(0, 4) >= year) return d;
+  // Only correct the year when that turns a non-meeting day into a meeting day (EDA meets on Wednesdays).
+  const wd = x => new Date(x + 'T12:00:00Z').getUTCDay(), fixed = `${year}${d.slice(4)}`;
+  return wd(d) !== 3 && wd(fixed) === 3 ? fixed : d;
+}
 
 async function handleMeetingDoc(env, src, c, ctx) {
   // Prefer the date shown next to the link on the page (file names sometimes carry typos), else the file name.
