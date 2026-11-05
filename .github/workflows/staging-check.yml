@@ -24,5 +24,13 @@ jobs:
               case "$code" in 2*) ;; *) echo "--- headers"; curl -sI "https://$host$path" | head -15; echo "--- body"; head -c 600 /tmp/body; echo;; esac
             done
           done
+      - name: "What staging is serving"
+        run: |
+          echo "env:        $(curl -s https://edascout-staging.ktsapps.com/api/me | jq -c .)"
+          for g in norfolk region state; do
+            curl -s "https://edascout-staging.ktsapps.com/api/dashboard?geo=$g" | jq -r --arg g "$g" '"\($g): \(.signals|length) signals, \(.meetings|length) EDA docs, \(.latest|length) latest, outlook=\(.outlook!=null), synopsis=\(.overview!=null)"'
+          done
+          curl -s "https://edascout-staging.ktsapps.com/api/stats?range=30" | jq -c '{visitors, views}' | sed 's/^/usage (staging only): /'
+          curl -s https://edascout-staging.ktsapps.com/ | grep -o 'app.js?v=[0-9]*' | head -1 | sed 's/^/front end: /'
       - name: "Staging deployments"
         run: npx --yes wrangler@4 deployments list --env staging 2>&1 | tail -15 || true
