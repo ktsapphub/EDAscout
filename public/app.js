@@ -1185,4 +1185,12 @@ function countView() { api('/api/hit', { method: 'POST', body: { vid: usageVid()
   setInterval(() => document.hidden || loadUsage(), 120000);
 })();
 
+// Staging sandbox banner so test data is never mistaken for the live site.
+api('/api/me').then(m => {
+  if (m.env !== 'staging') return;
+  document.title = 'STAGING · ' + document.title;
+  document.body.classList.add('is-staging');
+  document.body.insertAdjacentHTML('afterbegin', '<div class="staging-bar" role="note"><b>Staging sandbox</b> · a copy of production data; safe to test changes. <a href="https://edascout.ktsapps.com">Go to the live site ↗</a></div>');
+}).catch(() => {});
+
 router();

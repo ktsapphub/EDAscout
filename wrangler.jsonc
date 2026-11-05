@@ -33,18 +33,19 @@
     "MAX_LLM_CALLS_PER_RUN": "40",
     "MAX_ITEMS_PER_SOURCE": "8"
   },
-  // Staging: own Worker, own D1 + KV (never the production ones). Create the two resources, paste the ids, then
-  // `npx wrangler d1 migrations apply edascout-staging --remote --env staging`. Deployed by pushing the `staging` branch.
+  // Staging: own Worker, own D1 + KV (never the production ones). Deployed by pushing the `staging` branch.
+  // Refresh its data from production with the "Staging · copy production data" workflow (GitHub → Actions).
   "env": {
     "staging": {
       "name": "edascout-staging",
       "routes": [{ "pattern": "edascout-staging.ktsapps.com", "custom_domain": true }],
-      "d1_databases": [{ "binding": "DB", "database_name": "edascout-staging", "database_id": "REPLACE_WITH_STAGING_D1_ID", "migrations_dir": "migrations" }],
-      "kv_namespaces": [{ "binding": "KV", "id": "REPLACE_WITH_STAGING_KV_ID" }],
+      "d1_databases": [{ "binding": "DB", "database_name": "edascout-staging", "database_id": "f4583617-e0ea-4de7-b932-5d60cc65c53c", "migrations_dir": "migrations" }],
+      "kv_namespaces": [{ "binding": "KV", "id": "a5d50bba49144d309129365e01f5279b" }],
       "ai": { "binding": "AI" },
       "browser": { "binding": "BROWSER" },
-      "triggers": { "crons": [] },
-      "vars": { "APP_URL": "https://edascout-staging.ktsapps.com", "MAX_LLM_CALLS_PER_RUN": "40", "MAX_ITEMS_PER_SOURCE": "8" }
+      // One refresh a day keeps the sandbox current without doubling AI usage; "Run scan now" works any time.
+      "triggers": { "crons": ["30 11 * * *"] },
+      "vars": { "APP_ENV": "staging", "APP_URL": "https://edascout-staging.ktsapps.com", "MAX_LLM_CALLS_PER_RUN": "40", "MAX_ITEMS_PER_SOURCE": "8" }
     }
   }
   // Optional secrets (any subset, never committed): OPENAI_API_KEY, GEMINI_API_KEY, XAI_API_KEY, GROQ_API_KEY, ANTHROPIC_API_KEY

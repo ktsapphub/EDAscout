@@ -56,7 +56,7 @@ async function route(req, env, ctx, url) {
   let mm;
 
   // ----- open (read) -----
-  if (p === '/api/me') return json({ editor: await isEditor(req, env) });
+  if (p === '/api/me') return json({ editor: await isEditor(req, env), env: env.APP_ENV || 'production' });
   if (p === '/api/dashboard' && m === 'GET') return json(await dashboard(env, geoOf(url)));
   if (p === '/api/trends' && m === 'GET') {
     const geo = geoOf(url);

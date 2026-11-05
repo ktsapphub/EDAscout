@@ -1,0 +1,47 @@
+# Copies the production database into the staging sandbox (edascout-staging), replacing what staging had.
+# Production is only read (exported), never changed. Run any time from GitHub → Actions to reset the sandbox.
+name: "Staging · copy production data"
+run-name: "staging data · copy from production"
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-data
+  cancel-in-progress: false
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - name: "Export production (read-only)"
+        run: npx --yes wrangler@4 d1 export edascout --remote --env="" --output "$RUNNER_TEMP/prod.sql"
+      - name: "Empty the staging database"
+        run: |
+          set -o pipefail
+          npx --yes wrangler@4 d1 execute edascout-staging --remote --env staging --json \
+            --command "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'" > "$RUNNER_TEMP/tables.json"
+          TABLES=$(jq -r '.[0].results[].name' "$RUNNER_TEMP/tables.json")
+          if [ -n "$TABLES" ]; then
+            { echo "PRAGMA defer_foreign_keys = true;"; for t in $TABLES; do echo "DROP TABLE IF EXISTS \"$t\";"; done; } > "$RUNNER_TEMP/drop.sql"
+            npx --yes wrangler@4 d1 execute edascout-staging --remote --env staging --file "$RUNNER_TEMP/drop.sql" --yes
+          fi
+      - name: "Import into staging"
+        run: npx --yes wrangler@4 d1 execute edascout-staging --remote --env staging --file "$RUNNER_TEMP/prod.sql" --yes
+      - name: "Reset sandbox-only data"
+        # Staging gets its own usage counts, and AI-call logs from production don't count against staging's daily caps.
+        run: npx --yes wrangler@4 d1 execute edascout-staging --remote --env staging --yes --command "DELETE FROM visits; DELETE FROM area_views; DELETE FROM llm_calls;"
+      - name: "Summary"
+        run: |
+          npx --yes wrangler@4 d1 execute edascout-staging --remote --env staging --json \
+            --command "SELECT (SELECT COUNT(*) FROM sources) sources, (SELECT COUNT(*) FROM items) items, (SELECT COUNT(*) FROM meetings) meetings, (SELECT COUNT(*) FROM metrics) metric_points" | jq -r '.[0].results[0] | "Staging now has \(.sources) sources, \(.items) items, \(.meetings) meeting documents, \(.metric_points) trend data points."' | tee -a "$GITHUB_STEP_SUMMARY"
