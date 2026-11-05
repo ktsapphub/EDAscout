@@ -247,7 +247,7 @@ function sigStory(s, i) {
     <span class="num">${s.score}</span>
     <h3>${esc(s.title.slice(0, 140))}</h3>
     <p>${esc(storySummary(s, s.why || ''))}</p>
-    <div class="row"><span class="src">${esc(s.source)}${s.published_at ? ' · ' + fmtDate(s.published_at) : ''}</span><button class="read" data-story="${s.id}">Read story ↗</button></div>
+    <div class="row"><span class="src">${esc(s.source)} · ${s.published_at ? fmtDate(s.published_at) : 'found ' + fmtDate(s.found_at)}</span><button class="read" data-story="${s.id}">Read story ↗</button></div>
   </article>`;
 }
 
