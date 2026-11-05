@@ -916,7 +916,7 @@ let sources = [], tierTab = 'all';
 async function renderSources() {
   setStatus('idle', 'Sources');
   const me = await api('/api/me').catch(() => ({ editor: false }));
-  app.innerHTML = `<div class="page-head"><div><h1>Sources</h1><p>Everything EDAScout reads. Anyone can run a fresh scan; adding, pausing or removing sources asks for the edit key.</p></div>
+  app.innerHTML = `<div class="page-head"><div><h1>Sources</h1><p>Everything EDAScout reads. Anyone can run a fresh scan and pause or resume a source; adding, editing or removing sources needs the edit key.</p></div>
     <div class="actions"><button class="btn" id="validateAll">Check all sources</button><button class="btn" id="runNow">Run scan now</button><button class="btn primary" id="addBtn">+ Add source</button>${me.editor ? '<button class="btn" id="logout">Lock editing</button>' : ''}</div></div>
     <div id="runLog"></div>
     <div class="sched-sum" id="schedSum"></div>
@@ -1021,7 +1021,7 @@ async function rowAction(b) {
   try {
     if (act === 'toggle') {
       const on = b.getAttribute('aria-pressed') !== 'true';
-      await edit(() => api(`/api/sources/${id}`, { method: 'PATCH', body: { active: on } }));
+      await api(`/api/sources/${id}`, { method: 'PATCH', body: { active: on } }); // open to everyone
       s.active = on ? 1 : 0; b.setAttribute('aria-pressed', on); toast(on ? `${s.name} resumed` : `${s.name} paused`);
     } else if (act === 'remove') {
       await edit(() => api(`/api/sources/${id}`, { method: 'DELETE' }));

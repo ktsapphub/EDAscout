@@ -98,7 +98,7 @@ Story modal: summary, why it matters, actions, money, excerpt, related items, Li
 
 ## 8. Access and limits
 
-Public: view, Ask (20/hour per IP), Listen, Run scan (1 per 20 min). Edit key (HttpOnly cookie `eda_key`, hash in `prefs.admin_key_hash`): sources, models, pin/dismiss, Check all sources. Login attempts limited to 10 per 15 minutes.
+Public: view, Ask (20/hour per IP), Listen, Run scan (1 per 20 min), pause/resume a source (30 changes/hour per IP; logged in `source_changes`). Edit key (HttpOnly cookie `eda_key`, SHA-256 hash in `prefs.admin_key_hash`, same key on production and staging; the owner holds it): add, edit, remove or restore sources, models, pin/dismiss, Check all sources. Login attempts limited to 10 per 15 minutes.
 
 ## 9. Deploy and Mission Control
 
@@ -119,5 +119,5 @@ Public: view, Ask (20/hour per IP), Listen, Run scan (1 per 20 min). Edit key (H
 
 ## 12. Change log
 
-- **2026-11-05** — Ask answers visible again (animation fix). EDA meeting backlog backfill (13 months) and OCR of scanned minutes. Synopsis rewrites when its facts change, newest stories included, rules fallback. Top signals and Signal Board newest first (last 30 days). Sources auto-update check and Check all sources; failed sources retry next run. Site-wide usage with ranges and area split. Weekly roll-up readable. Off-topic news filter. Staging sandbox live with data copy and health check workflows. Mission Control deploy check installs packages; deploy uses Node 22.
+- **2026-11-05** — New edit key on production and staging; anyone can pause/resume sources, edits and removals need the key. Ask answers visible again (animation fix). EDA meeting backlog backfill (13 months) and OCR of scanned minutes. Synopsis rewrites when its facts change, newest stories included, rules fallback. Top signals and Signal Board newest first (last 30 days). Sources auto-update check and Check all sources; failed sources retry next run. Site-wide usage with ranges and area split. Weekly roll-up readable. Off-topic news filter. Staging sandbox live with data copy and health check workflows. Mission Control deploy check installs packages; deploy uses Node 22.
 - **2026-10-20** — v2: open access, area switch, trends, money & housing, EDA Outlook, story modal, motion, movable sections, browser fallback for blocked sites, 6-hour refresh with countdown.

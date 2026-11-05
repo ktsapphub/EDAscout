@@ -97,6 +97,20 @@ async function route(req, env, ctx, url) {
   }
   if (p === '/api/logout' && m === 'POST') return json({ ok: true }, 200, { 'set-cookie': 'eda_key=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0' });
 
+  // ----- open: anyone may pause or resume a source (no other changes) -----
+  if ((mm = p.match(/^\/api\/sources\/(\d+)$/)) && m === 'PATCH') {
+    const b = await req.clone().json().catch(() => ({}));
+    const keys = Object.keys(b);
+    if (keys.length === 1 && keys[0] === 'active' && typeof b.active === 'boolean' && !(await isEditor(req, env))) {
+      if (await limited(env, `toggle:${ip(req)}`, 30, 3600)) return json({ error: 'Too many changes this hour. Try again later.' }, 429);
+      const before = await env.DB.prepare('SELECT * FROM sources WHERE id = ? AND deleted_at IS NULL').bind(+mm[1]).first();
+      if (!before) return json({ error: 'Not found' }, 404);
+      await env.DB.prepare('UPDATE sources SET active = ? WHERE id = ?').bind(b.active ? 1 : 0, before.id).run();
+      await audit(env, before.id, b.active ? 'resume' : 'pause', { active: before.active }, { active: b.active, by: 'public' });
+      return json({ ok: true });
+    }
+  }
+
   // ----- edit (key) -----
   if (!(await isEditor(req, env))) return json({ error: 'edit-key', message: 'Enter the edit key to change sources or settings.' }, 401);
   if (m !== 'GET' && req.headers.get('origin') && new URL(req.headers.get('origin')).host !== url.host) return json({ error: 'Bad origin' }, 403);
