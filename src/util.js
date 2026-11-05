@@ -140,6 +140,42 @@ async function browserBinary(env, url) {
   }
 }
 
+/**
+ * Render the first pages of a PDF to JPEG images inside the cloud browser (pdf.js), for scanned documents
+ * that have no text layer. Returns data URLs.
+ */
+export async function browserPdfPages(env, url, { maxPages = 6, scale = 1.6 } = {}) {
+  if (!env?.BROWSER) return [];
+  const { default: puppeteer } = await import('@cloudflare/puppeteer');
+  const browser = await puppeteer.launch(env.BROWSER);
+  try {
+    const page = await browser.newPage();
+    await page.setBypassCSP(true).catch(() => {});
+    await page.goto(new URL(url).origin + '/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.addScriptTag({ url: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js' });
+    return await page.evaluate(async (u, maxPages, scale) => {
+      const r = await fetch(u, { credentials: 'include' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = new Uint8Array(await r.arrayBuffer());
+      // eslint-disable-next-line no-undef
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      // eslint-disable-next-line no-undef
+      const pdf = await pdfjsLib.getDocument({ data }).promise;
+      const out = [];
+      for (let i = 1; i <= Math.min(pdf.numPages, maxPages); i++) {
+        const pg = await pdf.getPage(i), vp = pg.getViewport({ scale });
+        const c = document.createElement('canvas'); c.width = vp.width; c.height = vp.height;
+        const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+        await pg.render({ canvasContext: ctx, viewport: vp }).promise;
+        out.push(c.toDataURL('image/jpeg', 0.8));
+      }
+      return out;
+    }, url, maxPages, scale);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
 async function browserHtml(env, url) {
   try {
     const out = await env.BROWSER.quickAction('content', { url, gotoOptions: { waitUntil: 'domcontentloaded', timeout: 30000 } });

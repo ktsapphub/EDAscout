@@ -1,5 +1,5 @@
 // Daily pipeline: fetch → diff → extract → score (rules) → summarize (cheap model, batched) → signals → brief.
-import { politeFetch, robustFetch, robotsAllows, sha256, extractLinks, contentLinks, parseFeed, mainText, pageTitle, pageDate,
+import { browserPdfPages, politeFetch, robustFetch, robotsAllows, sha256, extractLinks, contentLinks, parseFeed, mainText, pageTitle, pageDate,
   stripTags, dateFromText, lastDateIn, safeUrl, isoDate, today } from './util.js';
 import { scoreItem, watchRule } from './score.js';
 import { chat, budget as newBudget } from './llm.js';
@@ -202,10 +202,35 @@ export async function pdfToText(env, buf) {
   return one?.format === 'error' ? '' : String(one?.data || '');
 }
 
+/** True when a PDF gave back only metadata (a scanned image with no text layer). */
+const noTextLayer = t => String(t || '').replace(/^#.*$|^\s*-\s*[\w:]+=.*$/gm, '').replace(/\s+/g, ' ').trim().length < 300;
+const OCR_MODELS = ['@cf/meta/llama-4-scout-17b-16e-instruct', '@cf/google/gemma-3-12b-it'];
+
+/** Read a scanned PDF: render pages in the cloud browser, then transcribe each with a vision model. */
+export async function ocrPdf(env, url, ctx, { maxPages = 5 } = {}) {
+  const pages = await browserPdfPages(env, url, { maxPages }).catch(() => []);
+  const out = [];
+  for (const img of pages) {
+    if (ctx?.budget && ctx.budget.used >= ctx.budget.max) break;
+    for (const model of OCR_MODELS) {
+      try {
+        if (ctx?.budget) ctx.budget.used++;
+        const r = await env.AI.run(model, { max_tokens: 1800, messages: [{ role: 'user', content: [
+          { type: 'text', text: 'This is one page of public meeting minutes. Transcribe all of its text exactly, in reading order, as plain text. Do not summarize or add anything.' },
+          { type: 'image_url', image_url: { url: img } },
+        ] }] });
+        const text = typeof r?.response === 'string' ? r.response : r?.response?.content || r?.choices?.[0]?.message?.content || '';
+        if (text.trim().length > 40) { out.push(text.trim()); break; }
+      } catch { /* try the next model */ }
+    }
+  }
+  return out.join('\n\n');
+}
+
 const BODY_NAMES = [['iqm2', 'City Council'], ['nrha', 'NRHA'], ['norfolkdevelopment', 'EDA']];
 
 /** Up to `limit` linked-but-unread agendas/minutes from the last 13 months, newest first. */
-async function backfillMeetings(env, src, ctx, limit = 8) {
+async function backfillMeetings(env, src, ctx, limit = 4) {
   const { results } = await env.DB.prepare(`SELECT sl.url FROM seen_links sl WHERE sl.source_id = ? AND lower(sl.url) LIKE '%.pdf%'
       AND (lower(sl.url) LIKE '%agenda%' OR lower(sl.url) LIKE '%minute%' OR lower(sl.url) LIKE '%mintue%')
       AND NOT EXISTS (SELECT 1 FROM meetings m WHERE m.doc_url = sl.url)`).bind(src.id).all();
@@ -244,6 +269,11 @@ async function handleMeetingDoc(env, src, c, ctx) {
     const r = await robustFetch(env, c.url, { maxBytes: 15_000_000 });
     text = r.isBinary ? await pdfToText(env, r.body) : stripTags(r.body);
   } catch { /* store the link even if the PDF can't be read */ }
+  // Approved minutes are often copier scans with no text layer: read them visually.
+  if (/\.pdf($|\?)/i.test(c.url) && noTextLayer(text)) {
+    const seen = await ocrPdf(env, c.url, ctx).catch(() => '');
+    if (seen) text = seen;
+  }
 
   // Deterministic facts first (no model): dollar amounts and vote tallies.
   const amounts = [...new Set((text.match(/\$\s?\d[\d,]*(?:\.\d{2})?(?:\s?(?:million|billion))?/gi) || []).map(a => a.replace(/\s+/g, ' ')))].slice(0, 8);
