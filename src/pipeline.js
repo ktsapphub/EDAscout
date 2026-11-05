@@ -6,7 +6,7 @@ import { chat, budget as newBudget } from './llm.js';
 import { refreshMetrics, refreshAwards, storeMoney, trends } from './data.js';
 
 // Daily sources are re-read on every 6-hour refresh; weekly and monthly ones far less often.
-const OFF_TOPIC = /\b(shoot\w*|shot|murder\w*|homicide|kill(ed|ing|s)?|stabb\w*|arrest\w*|charged|charges|police|crash\w*|collision|injur\w*|dies|died|death|dead|missing|robber\w*|assault\w*|sentenced|jail|fire(fighters)?|blaze|drown\w*|weather|amber alert)\b/i;
+const OFF_TOPIC = /\b(shoot\w*|shot|shots|gunfire|gunshot\w*|murder\w*|homicide|kill(ed|ing|s)?|stabb\w*|arrest\w*|charged|charges|police|crash\w*|collision|injur\w*|dies|died|death|dead|missing|robber\w*|assault\w*|sentenced|jail|fire(fighters)?|blaze|drown\w*|weather|amber alert)\b/i;
 const CADENCE_DAYS = { daily: 0.2, weekly: 6.5, monthly: 27 };
 
 export async function dueSources(env, force = false) {
@@ -93,6 +93,8 @@ export async function processSource(env, src, ctx, { dryRun = false } = {}) {
     }
     // General local-news feeds also carry crime, crashes and weather; none of that is economic development.
     if (src.kind === 'news') cands = cands.filter(c => !OFF_TOPIC.test(c.title || ''));
+    // Drop links whose "title" is page code (CSS or script text scraped from a styled button).
+    cands = cands.filter(c => !/[{};]|:link\b|^\s*[.#][\w-]+[.:]/.test(c.title || ''));
 
     if (dryRun) return { ok: true, method, candidates: cands.slice(0, 5) };
 
