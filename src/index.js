@@ -387,7 +387,20 @@ async function stats(env, range = '7') {
   ]);
   const byArea = { norfolk: 0, region: 0, state: 0 };
   for (const r of areas.results) byArea[r.geo] = r.views;
-  return { range: key, from, visitors: tot.visitors, views: tot.views, today, byArea, daily: daily.results };
+  // Owner-provided estimate for the period before full tracking; added to the totals and labeled on the page.
+  const est = await env.DB.prepare('SELECT day, visitors, views, norfolk, region, state FROM usage_estimates WHERE day >= ? ORDER BY day').bind(from).all().catch(() => ({ results: [] }));
+  const e = est.results.reduce((a, r) => ({ visitors: a.visitors + r.visitors, views: a.views + r.views }), { visitors: 0, views: 0 });
+  for (const r of est.results) { byArea.norfolk += r.norfolk; byArea.region += r.region; byArea.state += r.state; }
+  const todayEst = est.results.find(r => r.day === new Date().toISOString().slice(0, 10));
+  const dayMap = new Map(daily.results.map(r => [r.day, { ...r }]));
+  for (const r of est.results) { const x = dayMap.get(r.day) || { day: r.day, visitors: 0, views: 0 }; x.visitors += r.visitors; x.views += r.views; dayMap.set(r.day, x); }
+  return {
+    range: key, from,
+    visitors: tot.visitors + e.visitors, views: tot.views + e.views,
+    today: { visitors: today.visitors + (todayEst?.visitors || 0), views: today.views + (todayEst?.views || 0) },
+    byArea, daily: [...dayMap.values()].sort((a, b) => a.day.localeCompare(b.day)),
+    estimated: e.visitors || e.views ? { ...e, through: '2026-11-05' } : null,
+  };
 }
 
 // ---------- Ask ----------

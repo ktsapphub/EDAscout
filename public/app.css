@@ -704,3 +704,4 @@ input::placeholder, textarea::placeholder { color: var(--ink-2); -webkit-text-fi
 .mtg.pending.posted::before { background: #6E9A2A; }
 @media (max-width: 720px) { .area-inner { padding-left: 16px; } .ap-grid { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .ar-item { animation: none; opacity: 1; } .area-body, .area-head .chev { transition: none; } }
+.usage .u-note { margin: 8px 0 0; font-size: 11.5px; color: var(--ink-2); }

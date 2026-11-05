@@ -1255,6 +1255,8 @@ function drawUsage(s) {
   const pts = s.daily || [];
   const max = Math.max(1, ...pts.map(p => p.views));
   $('#usageSpark').innerHTML = pts.length > 1 ? `<path d="${pts.map((p, i) => `${i ? 'L' : 'M'}${(i / (pts.length - 1) * 160).toFixed(1)},${(34 - p.views / max * 30).toFixed(1)}`).join('')}" fill="none" stroke="#2F6DB0" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` : '';
+  const note = $('#usageNote');
+  if (note) { note.hidden = !s.estimated; if (s.estimated) note.textContent = `Includes an estimate of ${s.estimated.visitors} visitors and ${s.estimated.views} page views from before full tracking began (Oct 20 – Nov 5, 2026); counts since then are measured.`; }
   $('#usage').hidden = false;
 }
 const loadUsage = () => api(`/api/stats?range=${usageRange}`).then(drawUsage).catch(() => {});

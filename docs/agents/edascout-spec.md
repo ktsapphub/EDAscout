@@ -82,7 +82,7 @@ Sections can be **moved, collapsed or hidden** (remembered per device and area; 
 7. **What's heating up** — topic momentum (8 weeks) and plans/research library.
 8. **Weekly Roll-up** — dark story cards, AI roll-up.
 
-Footer: **Site usage · all areas** — visitors, page views, visitors today, share by area and a daily trend line, with a range selector (7/14/30/60/90 days, year to date). Counts unique browsers by anonymous hashed ID; no IPs; bots and headless browsers excluded.
+Footer: **Site usage · all areas** — visitors, page views, visitors today, share by area and a daily trend line, with a range selector (7/14/30/60/90 days, year to date). Counts unique browsers by anonymous hashed ID; no IPs; bots and headless browsers excluded. Totals also include an owner-provided estimate for Oct 20 – Nov 5, 2026 (table `usage_estimates`: 15 visitors, 295 page views), when tracking was incomplete; the page labels it as an estimate.
 
 Story modal: summary, why it matters, actions, money, excerpt, related items, Listen, open original.
 
@@ -108,7 +108,7 @@ Public: view, Ask (20/hour per IP), Listen, Run scan (1 per 20 min), pause/resum
 
 ## 10. Data model (D1)
 
-`sources`, `seen_links`, `items`, `citations`, `signals`, `meetings`, `briefs` (kinds: `overview_<area>`, `eda_outlook`, `weekly`, legacy `daily`), `runs`, `model_routes`, `llm_calls`, `metrics`, `money`, `awards`, `visits`, `area_views`, memory tables (`entities`, `entity_events`, `threads`, `thread_items`, `mentions`, `prefs`, `feedback`, `notes`).
+`sources`, `seen_links`, `items`, `citations`, `signals`, `meetings`, `briefs` (kinds: `overview_<area>`, `eda_outlook`, `weekly`, legacy `daily`), `runs`, `model_routes`, `llm_calls`, `metrics`, `money`, `awards`, `visits`, `area_views`, `usage_estimates`, memory tables (`entities`, `entity_events`, `threads`, `thread_items`, `mentions`, `prefs`, `feedback`, `notes`).
 
 ## 11. Open items
 
