@@ -62,7 +62,12 @@ function countUp(el, to, fmt = v => Math.round(v)) {
   const step = t => { const p = Math.min(1, (t - t0) / 900); el.textContent = fmt(from + (to - from) * (1 - Math.pow(1 - p, 3))); if (p < 1) requestAnimationFrame(step); };
   requestAnimationFrame(step);
 }
-const swap = render => (document.startViewTransition && !reduce) ? document.startViewTransition(render) : render();
+const swap = render => {
+  if (!document.startViewTransition || reduce || document.hidden) return render();
+  const t = document.startViewTransition(render);
+  t.ready?.catch(() => {}); t.finished?.catch(() => {});
+  return t;
+};
 function reveal() {
   const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }), { rootMargin: '0px 0px -8% 0px' });
   $$('.reveal').forEach(z => { $$('.panel, .kpis, .metric', z).forEach((p, i) => p.style.setProperty('--i', i)); io.observe(z); });

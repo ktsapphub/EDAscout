@@ -6,6 +6,7 @@ import { chat, budget as newBudget } from './llm.js';
 import { refreshMetrics, refreshAwards, storeMoney, trends } from './data.js';
 
 // Daily sources are re-read on every 6-hour refresh; weekly and monthly ones far less often.
+const OFF_TOPIC = /\b(shoot\w*|shot|murder\w*|homicide|kill(ed|ing|s)?|stabb\w*|arrest\w*|charged|charges|police|crash\w*|collision|injur\w*|dies|died|death|dead|missing|robber\w*|assault\w*|sentenced|jail|fire(fighters)?|blaze|drown\w*|weather|storm|forecast|rain|amber alert)\b/i;
 const CADENCE_DAYS = { daily: 0.2, weekly: 6.5, monthly: 27 };
 
 export async function dueSources(env, force = false) {
@@ -90,6 +91,8 @@ export async function processSource(env, src, ctx, { dryRun = false } = {}) {
       const kws = src.keyword_filter.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
       cands = cands.filter(c => kws.some(k => `${c.title} ${c.excerpt || ''}`.toLowerCase().includes(k)));
     }
+    // General local-news feeds also carry crime, crashes and weather; none of that is economic development.
+    if (src.kind === 'news') cands = cands.filter(c => !OFF_TOPIC.test(c.title || ''));
 
     if (dryRun) return { ok: true, method, candidates: cands.slice(0, 5) };
 
@@ -379,7 +382,9 @@ function fmtMetric(m) {
   const v = m.latest.v, u = m.unit;
   const val = u === '%' ? `${v.toFixed(1)}%` : u === '$' ? `$${Math.round(v).toLocaleString('en-US')}` : u === '$M' ? `$${(v / 1000).toFixed(1)} billion` : u === 'k' ? `${v.toFixed(1)} thousand` : u === 'days' ? `${Math.round(v)} days` : Math.round(v).toLocaleString('en-US');
   const chg = m.change == null ? '' : u === '%' ? ` (${m.change >= 0 ? '+' : ''}${m.change.toFixed(1)} pts vs. a year earlier)` : ` (${m.pct >= 0 ? '+' : ''}${m.pct.toFixed(1)}% vs. a year earlier)`;
-  return `${m.label}: ${val} as of ${m.latest.d}${chg}`;
+  // Spell out good vs. bad so a small model can't misread "+0.3 pts unemployment" as an improvement.
+  const dir = m.change == null || m.better === 'neutral' ? '' : Math.abs(m.pct ?? m.change) < 0.05 ? ' (unchanged)' : (m.change > 0) === (m.better === 'up') ? ' (an improvement)' : ' (a deterioration)';
+  return `${m.label}: ${val} as of ${m.latest.d}${chg}${dir}`;
 }
 
 export async function overviewFacts(env, geo) {
@@ -406,7 +411,7 @@ export async function writeOverviews(env, ctx) {
     const facts = await overviewFacts(env, geo);
     if (facts.length < 2) continue;
     const out = await chat(env, 'summarize', [
-      { role: 'system', content: 'You write a 3-sentence economic synopsis for a city economic development board. Use only the facts given. Plain words, no hype, no bullet points, no numbers that are not in the facts. Say what is improving, what is weakening, and one thing to watch.' },
+      { role: 'system', content: 'You write a 3-sentence economic synopsis for a city economic development board. Use only the facts given. Plain words, no hype, no bullet points, no numbers that are not in the facts. Say what is improving, what is weakening, and one thing to watch. Each fact says whether it is an improvement or a deterioration; follow those labels exactly and never reverse them.' },
       { role: 'user', content: `Area: ${GEO_LABEL[geo]}\nFacts:\n- ${facts.join('\n- ')}` },
     ], { maxTokens: 220, budget: ctx?.budget });
     if (!out?.text) continue;
