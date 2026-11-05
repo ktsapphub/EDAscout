@@ -24,10 +24,10 @@ for (const name of ['iPhone 14', 'Pixel 7']) {
     catch (e) { r.steps.push({ label, ok: false, error: String(e.message || e).slice(0, 200) }); }
     await page.screenshot({ path: `${out}/${name.replace(/\W/g, '')}-${r.steps.length}-${label.replace(/\W+/g, '_')}.png` }).catch(() => {});
   };
-  await step('load', async () => { await page.goto(url + '/#/', { waitUntil: 'networkidle', timeout: 45000 }); await page.waitForTimeout(2500); });
+  await step('load', async () => { await page.goto(url + '/#/', { waitUntil: 'load', timeout: 45000 }); await page.waitForSelector('#today', { timeout: 20000 }); await page.waitForTimeout(2500); });
   await step('idle 20s (watch for re-renders)', async () => { const a = await page.evaluate(() => window.__renders); await page.waitForTimeout(20000); r.rendersWhileIdle = (await page.evaluate(() => window.__renders)) - a; });
   await step('scroll page', async () => { for (let i = 0; i < 12; i++) { await page.mouse.wheel(0, 700); await page.waitForTimeout(250); } await page.evaluate(() => scrollTo(0, 0)); await page.waitForTimeout(500); });
-  await step('tap a top signal', async () => { await page.locator('#today .carousel .story button.read').first().tap({ timeout: 8000 }); await page.waitForSelector('#modal:not([hidden])', { timeout: 8000 }); await page.waitForTimeout(800); await page.locator('#modal [data-close]').first().tap(); });
+  await step('tap a top signal', async () => { await page.locator('#today .carousel .story:not([aria-hidden]) button.read').first().tap({ timeout: 8000 }); await page.waitForSelector('#modal:not([hidden])', { timeout: 8000 }); await page.waitForTimeout(800); await page.locator('#modal [data-close]').first().tap(); });
   await step('expand an area', async () => { await page.locator('.ar-item .area-head').first().tap({ timeout: 8000 }); await page.waitForTimeout(800); });
   await step('switch to Hampton Roads', async () => { await page.locator('.scope [data-geo="region"]').tap(); await page.waitForTimeout(3000); });
   await step('open a trend chart', async () => { await page.locator('#trends .metric').first().tap({ timeout: 8000 }); await page.waitForSelector('#modal:not([hidden])', { timeout: 8000 }); await page.waitForTimeout(800); await page.locator('#modal [data-close]').first().tap(); });
