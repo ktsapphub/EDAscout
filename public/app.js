@@ -144,7 +144,7 @@ function drawDashboard(d) {
   const eda = edaZone(d);
 
   const sections = {
-    today: { title: `Today · ${g}`, body: `<div class="grid"><div class="span-12 kpis">${kpiRow(d, B)}</div>${briefPanel(d, B)}</div>` },
+    today: { title: `Today · ${g}`, body: `<div class="grid"><div class="span-12 kpis">${kpiRow(d, B)}</div>${briefPanel(d, B)}${areasPanel(d, B)}</div>` },
     eda: { title: 'EDA Board Meetings', small: 'Norfolk Economic Development Authority · agendas &amp; minutes', body: eda },
     trends: { title: `Trends · ${g}`, small: 'Source: FRED · tap a card for the full chart', body: trendsBlock() },
     signals: { title: `Signals · ${g}`, small: 'Scored 0–100 for relevance to Norfolk economic development', body: `<div class="grid">
@@ -177,6 +177,7 @@ function drawDashboard(d) {
   $$('[data-money]').forEach(el => countUp(el, +el.dataset.money, money));
   requestAnimationFrame(() => $$('.kpi [data-w]').forEach(el => (el.style.width = el.dataset.w + '%')));
   wireDashboard(d, B);
+  wireAreas(d, B);
   wireLayout();
   reveal();
 }
@@ -209,7 +210,7 @@ function buildBrief(d, ms) {
   // Top signals rotate with the news: only the last 30 days, newest first.
   const when = x => toDate(x.published_at || x.found_at)?.getTime() || 0;
   const recentSig = sigs.filter(x => Date.now() - when(x) < 30 * 864e5);
-  const top85 = recentSig.filter(s => s.score >= TOP_BAR).sort((a, b) => when(b) - when(a) || b.score - a.score).slice(0, 6);
+  const top85 = recentSig.filter(s => s.score >= TOP_BAR).sort((a, b) => b.score - a.score || when(b) - when(a)).slice(0, 12);
   const closest = top85.length ? [] : [...recentSig].sort((a, b) => b.score - a.score).slice(0, 3).sort((a, b) => when(b) - when(a));
 
   const totals = d.money.totals || [], total = totals.reduce((a, t) => a + t.total, 0), mentions = totals.reduce((a, t) => a + t.n, 0);
@@ -242,22 +243,32 @@ function kpiRow(d, B) {
   return ['unemp', 'jobs', 'gdp', 'list_price'].map(tile).join('') || '<div class="kpi"><div class="l">Trend data loads with the next update.</div></div>';
 }
 
-function sigStory(s, i) {
-  return `<article class="story" style="animation-delay:${i * 70}ms" data-say="sig${i}">
+function sigStory(s, i, clone = false) {
+  return `<article class="story" ${clone ? 'aria-hidden="true" inert' : `data-say="sig${i}"`}>
     <span class="num">${s.score}</span>
     <h3>${esc(s.title.slice(0, 140))}</h3>
     <p>${esc(storySummary(s, s.why || ''))}</p>
-    <div class="row"><span class="src">${esc(s.source)} · ${s.published_at ? fmtDate(s.published_at) : 'found ' + fmtDate(s.found_at)}</span><button class="read" data-story="${s.id}">Read story ↗</button></div>
+    <div class="row"><span class="src hl">${esc(s.source)} · ${s.published_at ? fmtDate(s.published_at) : 'found ' + fmtDate(s.found_at)}</span><button class="read" data-story="${s.id}">Read story ↗</button></div>
   </article>`;
+}
+
+function signalCarousel(list, dim = false) {
+  if (!list.length) return '';
+  const loop = list.length > 2 && !reduce;
+  const cards = list.map((x, i) => sigStory(x, i)).join('') + (loop ? list.map((x, i) => sigStory(x, i, true)).join('') : '');
+  return `<div class="carousel ${dim ? 'dim' : ''} ${loop ? 'loop' : 'static'}" style="--n:${list.length}" aria-roledescription="carousel" aria-label="Top signals">
+    <div class="car-track">${cards}</div>
+    ${loop ? '<button class="car-toggle" type="button" aria-pressed="false" aria-label="Pause the carousel">❚❚</button>' : ''}
+  </div>`;
 }
 
 function briefPanel(d, B) {
   const top = B.top85.length
-    ? `<div class="stories">${B.top85.map(sigStory).join('')}</div>`
-    : `<p class="note">No story scored 75 or higher for ${B.g} in this update.${B.closest.length ? ' Closest to the bar:' : ''}</p>${B.closest.length ? `<div class="stories dim">${B.closest.map(sigStory).join('')}</div>` : ''}`;
+    ? signalCarousel(B.top85)
+    : `<p class="note">No story scored 75 or higher for ${B.g} in this update.${B.closest.length ? ' Closest to the bar:' : ''}</p>${signalCarousel(B.closest, true)}`;
   const lead = geo === 'norfolk'
-    ? `<div class="lead-chip"><div class="big" data-count="${B.edaDays ?? 0}">0</div><div><b>day${B.edaDays === 1 ? '' : 's'} until the next EDA meeting</b><span>${B.nextEda ? fmtDate(B.nextEda) : ''} · 12:00 PM · 999 Waterside Dr.</span><button class="jump" data-jump="eda">See EDA meetings ↓</button></div></div>`
-    : `<div class="lead-chip"><div class="big">${B.up.length}<small>/${B.dir.length}</small></div><div><b>indicators improved over the year</b><span>${B.g} · Federal Reserve (FRED) data</span><button class="jump" data-jump="trends">See trends ↓</button></div></div>`;
+    ? `<div class="lead-chip"><div class="big" data-count="${B.edaDays ?? 0}">0</div><div><b>day${B.edaDays === 1 ? '' : 's'} until the next EDA meeting</b><span>${B.nextEda ? fmtDate(B.nextEda) : ''} · 12:00 PM · 999 Waterside Dr.</span><button class="jump" data-open-area="eda">See EDA meetings ↓</button></div></div>`
+    : `<div class="lead-chip"><div class="big">${B.up.length}<small>/${B.dir.length}</small></div><div><b>indicators improved over the year</b><span>${B.g} · Federal Reserve (FRED) data</span><button class="jump" data-open-area="trends">See trends ↓</button></div></div>`;
   return `<section class="panel brief span-12">
     <div class="panel-head"><h2>Today's Brief · ${B.g}</h2>
       <span class="meta">${fmtDate(new Date().toISOString().slice(0, 10))} · ${B.aiSynopsis ? 'AI synopsis of this page' : 'summary of this page'}</span>
@@ -265,12 +276,72 @@ function briefPanel(d, B) {
     </div>
     <div class="panel-body">
       <div class="brief-top">${lead}<div class="synopsis" data-say="syn"><h4>Synopsis${d.overview?.created ? ` <span class="syn-when">· updated ${ago(d.overview.created)}</span>` : ''}</h4><p>${esc(B.synopsis)}</p></div></div>
-      <h4 class="bh"><span>Top signals · score 75+ · newest first</span></h4>${top}
-      <h4 class="bh"><span>Area by area</span></h4>
-      <ol class="areas">${B.areas.map((a, i) => `<li data-say="area${i}" style="--i:${i}"><span class="ai">${ico(a.icon)}</span><div><b>${esc(a.label)}</b><p>${esc(a.line)}</p></div><button class="jump" data-jump="${a.id}" aria-label="Go to ${esc(a.label)}">View ↓</button></li>`).join('')}</ol>
+      <h4 class="bh"><span>Top signals · score 75+ · highest first</span></h4>${top}
       ${B.keyMetrics.length ? `<h4 class="bh"><span>The numbers</span></h4><div class="nums">${B.keyMetrics.map(m => `<div class="num-chip"><span>${esc(m.label)}</span><b>${fmtVal(m.latest.v, m.unit)}</b><i class="chg ${['flat', 'good', 'bad'][[0, 1, -1].indexOf(direction(m))]}">${esc(chgWords(m) || fmtDate(m.latest.d))}</i></div>`).join('')}</div>` : ''}
     </div>
   </section>`;
+}
+
+// ---------------- Area by area: separate panel, each area expands in place ----------------
+const openAreas = new Set();
+function areasPanel(d, B) {
+  return `<section class="panel areas-panel span-12" id="areasPanel">
+    <div class="panel-head"><h2>${ico('book')}Area by area</h2><span class="meta">Tap an area to open it here</span>
+      <button class="btn sm" id="areasAll" type="button">Expand all</button></div>
+    <div class="panel-body flush"><ol class="area-list">${B.areas.map((a, i) => `<li class="ar-item ${openAreas.has(a.id) ? 'open' : ''}" data-area="${a.id}" data-say="area${i}" style="--i:${i}">
+      <button class="area-head" type="button" aria-expanded="${openAreas.has(a.id)}" aria-controls="area-body-${a.id}">
+        <span class="ai">${ico(a.icon)}</span><span class="at"><b>${esc(a.label)}</b><span>${esc(a.line)}</span></span><span class="chev" aria-hidden="true"></span></button>
+      <div class="area-body" id="area-body-${a.id}" role="region" aria-label="${esc(a.label)}"><div class="area-inner">${openAreas.has(a.id) ? areaPreview(a.id, d, B) : ''}</div></div>
+    </li>`).join('')}</ol></div>
+  </section>`;
+}
+
+function areaPreview(id, d, B) {
+  const full = `<button class="linkbtn area-full" data-jump="${id}">Open the full section ↓</button>`;
+  const when = x => x.published_at || x.found_at;
+  if (id === 'eda') {
+    const groups = meetingGroups(d), pend = pendingMeetings(groups, d.edaPosted || []), lm = d.outlook?.last_meeting;
+    return `<div class="ap-grid">
+      <div class="ap-card"><h5>Next meeting</h5><p class="ap-big">${B.nextEda ? fmtDate(B.nextEda) : '—'}</p><p class="muted">${B.edaDays != null ? `${B.edaDays} days away · ` : ''}12:00 PM · 999 Waterside Dr.</p></div>
+      <div class="ap-card wide"><h5>Last meeting${lm?.date ? ` · ${fmtDate(lm.date)}` : ''}</h5><p>${esc(noIds(lm?.summary || 'Not available yet.'))}</p></div>
+    </div>
+    <ul class="ap-rows">${groups.slice(0, 4).map(gp => `<li><b>${gp.date ? fmtDate(gp.date) : 'Undated'}</b> <span class="muted">${gp.docs.map(x => x.doc_kind).join(' + ')}</span><span>${esc(firstSentence(gp.synopsis))}</span><button class="linkbtn" data-story="${gp.detailId}">Details</button></li>`).join('')}
+      ${pend.map(p => `<li><b>${fmtDate(p.date)}</b> <span class="pend-chip ${p.minutesUrl ? 'posted' : ''}">${p.minutesUrl ? 'Minutes posted' : 'Minutes pending'}</span>${p.minutesUrl ? `<a href="${esc(p.minutesUrl)}" target="_blank" rel="noopener">PDF ↗</a>` : ''}</li>`).join('')}</ul>${full}`;
+  }
+  if (id === 'trends') return `<div class="metrics compact">${(trendData?.metrics || []).map(metricCard).join('')}</div>${full}`;
+  if (id === 'signals') return `<ul class="ap-rows">${d.signals.slice(0, 6).map(s => `<li><span class="ap-score">${s.score}</span><button class="linkbtn" data-story="${s.id}">${esc(s.title)}</button><span class="ap-src">${esc(s.source)} · ${fmtDate(when(s))}</span></li>`).join('')}</ul>${full}`;
+  if (id === 'money') {
+    const rows = d.money.items || [];
+    return `${donut((d.money.totals || []).map(t => ({ name: t.kind, value: t.total })), { label: '90-day total' }) || '<p class="muted">No dollar figures in recent stories.</p>'}
+      <ul class="ap-rows">${rows.slice(0, 3).map(m => `<li><span class="ap-score">${money(m.amount)}</span><button class="linkbtn" data-story="${m.id}">${esc(m.label.slice(0, 140))}</button><span class="ap-src">${esc(m.source)}</span></li>`).join('')}</ul>${full}`;
+  }
+  if (id === 'cityhall') return `<ul class="ap-rows">${[...d.cityhall.slice(0, 3), ...d.latest.slice(0, 4)].map(r => `<li><button class="linkbtn" data-story="${r.id}">${esc(r.title)}</button><span class="ap-src">${esc(r.source)} · found ${ago(r.found_at)}</span></li>`).join('')}</ul>${full}`;
+  if (id === 'topics') return `${topicsList(d.topics)}${full}`;
+  return full;
+}
+
+function wireAreas(d, B) {
+  const setOpen = (li, on) => {
+    const id = li.dataset.area, inner = $('.area-inner', li), head = $('.area-head', li);
+    if (on) { openAreas.add(id); if (!inner.innerHTML.trim()) inner.innerHTML = areaPreview(id, d, B); }
+    else openAreas.delete(id);
+    li.classList.toggle('open', on); head.setAttribute('aria-expanded', on);
+    if (on) { wireStories(); bars(); $$('.metric', li).forEach(b => b.onclick = () => openMetric(b.dataset.key)); $$('[data-jump]', li).forEach(b => b.onclick = () => $('#' + b.dataset.jump)?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' })); }
+    $('#areasAll').textContent = $$('.ar-item').every(x => x.classList.contains('open')) ? 'Collapse all' : 'Expand all';
+  };
+  $$('.area-head').forEach(h => h.onclick = () => { const li = h.closest('.ar-item'); setOpen(li, !li.classList.contains('open')); });
+  $('#areasAll').onclick = () => { const all = $$('.ar-item').every(x => x.classList.contains('open')); $$('.ar-item').forEach(li => setOpen(li, !all)); };
+  $$('[data-open-area]').forEach(b => b.onclick = () => {
+    const li = $(`.ar-item[data-area="${b.dataset.openArea}"]`);
+    if (!li) return $('#' + b.dataset.openArea)?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth' });
+    setOpen(li, true); li.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'nearest' });
+  });
+  $$('.ar-item.open').forEach(li => setOpen(li, true));
+  // Carousel: pause on hover/focus (CSS) and with the button.
+  $$('.car-toggle').forEach(btn => btn.onclick = () => {
+    const car = btn.closest('.carousel'), paused = car.classList.toggle('paused');
+    btn.setAttribute('aria-pressed', paused); btn.textContent = paused ? '▶' : '❚❚'; btn.setAttribute('aria-label', paused ? 'Play the carousel' : 'Pause the carousel');
+  });
 }
 
 function briefSpeech(B) {
@@ -305,8 +376,10 @@ function meetingGroups(d) {
   });
 }
 /** Past first-Wednesday EDA meetings (last 6 months) with no minutes/details uploaded yet. */
-function pendingMeetings(groups) {
+function pendingMeetings(groups, posted = []) {
   const today = new Date(Date.now() - 4 * 3600e3).toISOString().slice(0, 10), out = [];
+  const postedMin = new Map(posted.filter(x => x.kind === 'minutes').map(x => [x.date.slice(0, 7), x.url]));
+  const postedAny = new Set(posted.map(x => x.date.slice(0, 7)));
   const minutesFor = new Set(groups.filter(g => g.docs.some(x => x.doc_kind === 'minutes') && g.date).map(g => g.date.slice(0, 7)));
   const anyFor = new Set(groups.filter(g => g.date).map(g => g.date.slice(0, 7)));
   const n = new Date();
@@ -314,17 +387,20 @@ function pendingMeetings(groups) {
     const d = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() - back, 1));
     while (d.getUTCDay() !== 3) d.setUTCDate(d.getUTCDate() + 1);
     const iso = d.toISOString().slice(0, 10);
-    if (iso < today && !minutesFor.has(iso.slice(0, 7))) out.push({ date: iso, hasAgenda: anyFor.has(iso.slice(0, 7)) });
+    const k = iso.slice(0, 7);
+    if (iso < today && !minutesFor.has(k)) out.push({ date: iso, hasAgenda: anyFor.has(k) || postedAny.has(k), minutesUrl: postedMin.get(k) || null });
   }
   return out;
 }
 function pendingCard(p, i) {
   const t = toDate(p.date);
-  return `<article class="mtg pending" style="--i:${i}">
+  return `<article class="mtg pending ${p.minutesUrl ? 'posted' : ''}" style="--i:${i}">
     <div class="mtg-date"><span class="m">${t.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })}</span><span class="d">${t.getUTCDate()}</span><span class="y">${t.getUTCFullYear()}</span></div>
-    <div class="mtg-body"><div class="mtg-docs"><span class="pend-chip">Minutes pending</span></div>
-      <p>This meeting has taken place, but ${p.hasAgenda ? 'only the agenda' : 'no agenda or minutes'} ${p.hasAgenda ? 'is' : 'are'} posted so far. Minutes are usually approved at the next meeting. EDAScout will fill this in automatically after its next scan finds them.</p>
-      <div class="mtg-actions"><a class="btn sm" href="https://norfolkdevelopment.com/target-industries/the-norfolk-economic-development-authority/" target="_blank" rel="noopener">Check the EDA page ↗</a></div></div>
+    <div class="mtg-body">${p.minutesUrl ? `<div class="mtg-docs"><span class="pend-chip posted">Minutes posted</span></div>
+      <p>The approved minutes are posted on the EDA site. EDAScout is reading them (they are scanned, so each page is read as an image) and will add the summary and actions on its next update.</p>
+      <div class="mtg-actions"><a class="btn sm" href="${esc(p.minutesUrl)}" target="_blank" rel="noopener">Open the minutes PDF ↗</a></div>` : `<div class="mtg-docs"><span class="pend-chip">Minutes pending</span></div>
+      <p>This meeting has taken place, but ${p.hasAgenda ? 'only the agenda' : 'no agenda or minutes'} ${p.hasAgenda ? 'is' : 'are'} posted so far. Minutes are usually approved at the next meeting. EDAScout adds them automatically once the EDA posts them.</p>
+      <div class="mtg-actions"><a class="btn sm" href="https://norfolkdevelopment.com/target-industries/the-norfolk-economic-development-authority/" target="_blank" rel="noopener">Check the EDA page ↗</a></div>`}</div>
   </article>`;
 }
 function meetingSpeech(gp) {
@@ -341,7 +417,7 @@ function outlookSpeech(o) {
 function edaZone(d) {
   const nextEda = d.kpis.nextEda, dt = nextEda ? toDate(nextEda) : null;
   const days = dt ? Math.max(0, Math.ceil((dt - Date.now()) / 864e5)) : null;
-  const groups = meetingGroups(d), pending = pendingMeetings(groups);
+  const groups = meetingGroups(d), pending = pendingMeetings(groups, d.edaPosted || []);
   return `<div class="grid">
       <section class="panel span-4 next-card">
         <div class="panel-head"><h2>${ico('cal')}Next meeting</h2></div>

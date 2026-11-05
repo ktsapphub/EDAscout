@@ -243,7 +243,7 @@ async function backfillMeetings(env, src, ctx, limit = 4) {
   return n;
 }
 /** Date from the file name, with the year corrected from the upload folder (/uploads/2026/02/) when the name has a typo. */
-function fixYear(url) {
+export function fixYear(url) {
   const d = dateFromText(url.split('/').pop().replace(/(\d)(st|nd|rd|th)\b/gi, '$1').replace(/[-_]+/g, ' '));
   const up = url.match(/uploads\/(\d{4})\/(\d{2})\//);
   if (!d || !up) return d;

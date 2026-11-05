@@ -1,7 +1,7 @@
 // EDAScout Worker: open dashboard + JSON API, daily scan on cron.
 // Viewing, Ask and "Run scan" are open to everyone (rate-limited). Changing sources/models needs the edit key.
 import { json, safeUrl, sha256, robotsAllows } from './util.js';
-import { runDaily, processSource } from './pipeline.js';
+import { runDaily, processSource, fixYear } from './pipeline.js';
 import { chat, clearRouteCache } from './llm.js';
 import { trends, METRICS } from './data.js';
 
@@ -301,10 +301,21 @@ async function dashboard(env, geo) {
     awards: awards.results,
     topics: { weeks, list: topics },
     library: library.results,
-    outlook, overview, nextRefresh: nextRefresh(),
+    outlook, overview, nextRefresh: nextRefresh(), edaPosted: await edaPosted(env),
   };
   await env.KV.put(ck, JSON.stringify(out), { expirationTtl: 300 }).catch(() => {});
   return out;
+}
+
+/** EDA agendas/minutes linked on the EDA page but not read yet (so the page can say "posted" right away). */
+async function edaPosted(env) {
+  const { results } = await env.DB.prepare(`SELECT sl.url FROM seen_links sl JOIN sources s ON s.id = sl.source_id
+      WHERE s.kind = 'meetings' AND s.url LIKE '%norfolkdevelopment%' AND lower(sl.url) LIKE '%.pdf%'
+      AND (lower(sl.url) LIKE '%minute%' OR lower(sl.url) LIKE '%mintue%' OR lower(sl.url) LIKE '%agenda%')
+      AND NOT EXISTS (SELECT 1 FROM meetings m WHERE m.doc_url = sl.url)`).all().catch(() => ({ results: [] }));
+  const cutoff = new Date(Date.now() - 400 * 864e5).toISOString().slice(0, 10);
+  return results.map(r => ({ url: r.url, date: fixYear(r.url), kind: /minute|mintue/i.test(r.url) ? 'minutes' : 'agenda' }))
+    .filter(x => x.date && x.date >= cutoff).sort((a, b) => b.date.localeCompare(a.date));
 }
 
 const safeParse = s => { try { return JSON.parse(s); } catch { return null; } };
