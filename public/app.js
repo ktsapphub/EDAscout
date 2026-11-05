@@ -772,7 +772,7 @@ function openMetric(key, range = '1Y', type = null) {
   };
   $$('#modal [data-range]').forEach(b => b.onclick = () => { range = b.dataset.range; $$('#modal [data-range]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
   $$('#modal [data-type]').forEach(b => b.onclick = () => { type = b.dataset.type; $$('#modal [data-type]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
-  $('#modal [data-listen]').onclick = () => { speechSynthesis?.cancel(); speakText(`${m.label} in ${GEO_NAMES[geo]} is ${fmtVal(m.latest.v, m.unit)} as of ${fmtDate(m.latest.d)}${chgWords(m) ? ', ' + chgWords(m) : ''}.`); };
+  $('#modal [data-listen]').onclick = () => { speakText(`${m.label} in ${GEO_NAMES[geo]} is ${fmtVal(m.latest.v, m.unit)} as of ${fmtDate(m.latest.d)}${chgWords(m) ? ', ' + chgWords(m) : ''}.`); };
   requestAnimationFrame(draw);
   return close;
 }
@@ -897,7 +897,7 @@ async function openStory(id) {
     </div>
     <footer><button class="btn" data-listen>▶ Listen</button><span class="muted" style="font-size:12px">Summary is machine-written; the original is the record.</span><a class="btn primary" href="${esc(s.url)}" target="_blank" rel="noopener" data-autofocus>Open full story ↗</a></footer>`);
   $$('#modal [data-related]').forEach(b => b.onclick = () => { close(); openStory(+b.dataset.related); });
-  $('#modal [data-listen]').onclick = () => { speechSynthesis?.cancel(); speakText(`${s.title}. ${s.summary || ''} ${s.why ? 'Why it matters: ' + s.why : ''}`); };
+  $('#modal [data-listen]').onclick = () => { speakText(`${s.title}. ${s.summary || ''} ${s.why ? 'Why it matters: ' + s.why : ''}`); };
 }
 
 // ---------------- edit key prompt ----------------
@@ -930,7 +930,7 @@ function unlockSpeech() {
 const chunkText = t => (t.match(/[^.!?;:]+[.!?;:]?\s*/g) || [t]).reduce((a, s) => {
   if (a.length && (a.at(-1) + s).length < 160) a[a.length - 1] += s; else a.push(s); return a;
 }, []).map(s => s.trim()).filter(Boolean);
-function speakText(text, { onstart, onend } = {}) {
+function synthSpeak(text, { onstart, onend } = {}) {
   if (!('speechSynthesis' in window)) { toast('Your browser cannot read aloud.'); onend?.(); return; }
   const chunks = chunkText(text.replace(/\bEDA\b/g, 'E.D.A.').replace(/\bNRHA\b/g, 'N.R.H.A.'));
   if (!chunks.length) { onend?.(); return; }
@@ -946,23 +946,108 @@ function speakText(text, { onstart, onend } = {}) {
   });
   if (speechSynthesis.paused) speechSynthesis.resume();
 }
+
+// ---------------- Audio player: real audio (keeps playing on a locked phone), pause/resume, lock-screen controls ----------------
+const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YQAAAAA=';
+const player = {
+  el: null, queue: [], i: 0, urls: [], playing: false, btn: null, useSynth: false,
+  audio() {
+    if (!this.el) { this.el = new Audio(); this.el.preload = 'auto'; this.el.setAttribute('playsinline', ''); this.el.onended = () => this.next(); this.el.onerror = () => this.fallback(); }
+    return this.el;
+  },
+  /** Must be called inside a tap: unlocks audio playback on iOS for the rest of the session. */
+  unlock() { const a = this.audio(); if (!a.src || a.src === SILENT) { a.src = SILENT; a.play().catch(() => {}); } },
+  async clip(text) {
+    const res = await fetch('/api/tts', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text: ttsText(text) }) });
+    if (!res.ok) throw new Error('tts ' + res.status);
+    return URL.createObjectURL(await res.blob());
+  },
+  start(items, btn = null, title = 'EDA Scout') {
+    this.stop(true);
+    this.unlock();
+    this.queue = items.flatMap(it => { const ch = ttsChunks(it.text); return ch.map((t, k) => ({ ...it, text: t, first: k === 0, last: k === ch.length - 1 })); });
+    if (!this.queue.length) return;
+    this.i = 0; this.btn = btn; this.playing = true; this.useSynth = false; this.title = title;
+    this.urls = this.queue.map(() => null);
+    // Prepare every clip up front (in order) so playback continues while the phone is locked.
+    this.loading = (async () => { for (let k = 0; k < this.queue.length; k++) { if (!this.playing && k > this.i) break; try { this.urls[k] = this.urls[k] || this.clip(this.queue[k].text); await this.urls[k]; } catch { this.urls[k] = Promise.reject(new Error('x')); this.urls[k].catch(() => {}); } } })();
+    this.setupMedia(); this.ui(); this.playCurrent();
+  },
+  async playCurrent() {
+    const it = this.queue[this.i];
+    if (!it) return this.finish();
+    if (it.first) it.onstart?.();
+    this.highlight(it.say); this.ui();
+    if (this.useSynth) return synthSpeak(it.text, { onend: () => this.playing && this.next() });
+    try {
+      while (!this.urls[this.i]) await new Promise(r => setTimeout(r, 50));
+      const url = await this.urls[this.i];
+      if (!this.playing || this.queue[this.i] !== it) return;
+      const a = this.audio(); a.src = url; await a.play();
+    } catch { this.fallback(); }
+  },
+  fallback() { if (!this.playing) return; this.useSynth = true; const it = this.queue[this.i]; if (it) synthSpeak(it.text, { onend: () => this.playing && this.next() }); },
+  next() { const it = this.queue[this.i]; if (it?.last) it.onend?.(); this.i++; if (this.i >= this.queue.length) return this.finish(); this.playCurrent(); },
+  toggle() {
+    const a = this.audio();
+    if (this.useSynth) { if (speechSynthesis.paused) { speechSynthesis.resume(); this.paused = false; } else { speechSynthesis.pause(); this.paused = true; } }
+    else if (a.paused) { a.play().catch(() => {}); this.paused = false; } else { a.pause(); this.paused = true; }
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = this.paused ? 'paused' : 'playing';
+    this.ui();
+  },
+  stop(silent = false) {
+    this.playing = false; this.paused = false;
+    try { speechSynthesis?.cancel(); } catch {}
+    if (this.el) { this.el.pause(); this.el.removeAttribute('src'); }
+    (this.urls || []).forEach(u => u && Promise.resolve(u).then(x => URL.revokeObjectURL(x)).catch(() => {}));
+    this.urls = []; this.highlight(null);
+    if (this.btn) { const l = this.btn.querySelector('.lt') || this.btn; this.btn.classList.remove('speaking-now'); l.textContent = this.btn.dataset.orig || l.textContent; }
+    if (!silent) this.queue.at(-1)?.onend?.();
+    this.queue = []; this.btn = null; this.ui();
+    if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
+  },
+  finish() { this.stop(true); },
+  highlight(say) { $$('[data-say].speaking').forEach(l => l.classList.remove('speaking')); if (say) $(`[data-say="${say}"]`)?.classList.add('speaking'); },
+  setupMedia() {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.metadata = new MediaMetadata({ title: this.title, artist: `EDA Scout · ${GEO_NAMES[geo]}`, album: 'Norfolk economic development' });
+    const h = (k, fn) => { try { navigator.mediaSession.setActionHandler(k, fn); } catch {} };
+    h('play', () => { if (this.paused) this.toggle(); }); h('pause', () => { if (!this.paused) this.toggle(); });
+    h('stop', () => this.stop()); h('nexttrack', () => this.next()); h('previoustrack', () => { this.i = Math.max(0, this.i - 1); this.playCurrent(); });
+    navigator.mediaSession.playbackState = 'playing';
+  },
+  ui() {
+    const bar = $('#player'); if (!bar) return;
+    bar.hidden = !this.playing;
+    if (!this.playing) return;
+    $('#plLabel').textContent = `${this.title} · ${Math.min(this.i + 1, this.queue.length)} of ${this.queue.length}`;
+    $('#plToggle').innerHTML = this.paused ? '▶ Resume' : '❚❚ Pause';
+    $('#plToggle').setAttribute('aria-pressed', !!this.paused);
+  },
+};
+const ttsText = t => String(t).replace(/\bEDA\b/g, 'E D A').replace(/\bNRHA\b/g, 'N R H A').replace(/\bFRED\b/g, 'Fred');
+/** Up to ~800 characters per clip, split on sentences. */
+const ttsChunks = t => (String(t).match(/[^.!?]+[.!?]?\s*/g) || [String(t)]).reduce((a, x) => { if (a.length && (a.at(-1) + x).length < 800) a[a.length - 1] += x; else a.push(x); return a; }, []).map(x => x.trim()).filter(Boolean);
+$('#plToggle')?.addEventListener('click', () => player.toggle());
+$('#plNext')?.addEventListener('click', () => player.next());
+$('#plStop')?.addEventListener('click', () => player.stop());
+
+/** Speak one piece of text (stories, charts, Ask answers). */
+function speakText(text, { onstart, onend, title = 'EDA Scout' } = {}) { player.start([{ text, onstart, onend }], null, title); }
+
 /** Read a list of parts aloud; the button toggles to Stop; the part being read is highlighted. */
-function speakParts(parts, btn) {
-  const label = btn.querySelector('.lt') || btn, orig = btn.dataset.orig || label.textContent;
-  btn.dataset.orig = orig;
-  const clear = () => { btn.classList.remove('speaking-now'); label.textContent = orig; $$('[data-say].speaking').forEach(l => l.classList.remove('speaking')); };
-  if (speechSynthesis.speaking) { const same = btn.classList.contains('speaking-now'); speechSynthesis.cancel(); $$('.speaking-now').forEach(x => { x.classList.remove('speaking-now'); const l = x.querySelector('.lt') || x; l.textContent = x.dataset.orig || l.textContent; }); clear(); if (same) return; }
+function speakParts(parts, btn, title = 'Today’s brief') {
+  if (player.playing && player.btn === btn) { player.stop(); return; }
+  const label = btn.querySelector('.lt') || btn;
+  btn.dataset.orig = btn.dataset.orig || label.textContent;
+  player.start(parts.map(p => ({ text: p.text, say: p.say })), btn, title);
   btn.classList.add('speaking-now'); label.textContent = btn.querySelector('.lt') ? 'Stop' : '■ Stop';
-  parts.forEach((p, i) => speakText(p.text, {
-    onstart: () => { $$('[data-say].speaking').forEach(l => l.classList.remove('speaking')); if (p.say) $(`[data-say="${p.say}"]`)?.classList.add('speaking'); },
-    onend: () => { if (i === parts.length - 1) clear(); },
-  }));
 }
 
 // ---------------- Ask ----------------
 const drawer = $('#askDrawer'), fab = $('#askFab');
 fab.onclick = () => { drawer.hidden = false; fab.hidden = true; $('#askInput').focus(); };
-$('#askClose').onclick = () => { drawer.hidden = true; fab.hidden = false; speechSynthesis?.cancel(); };
+$('#askClose').onclick = () => { drawer.hidden = true; fab.hidden = false; player.stop(); };
 $('#askForm').onsubmit = e => { e.preventDefault(); ask($('#askInput').value); };
 async function ask(q, spoken = false) {
   q = q.trim();
@@ -990,7 +1075,7 @@ $('#askMic').onclick = () => {
   rec.onend = () => orb.classList.remove('listening');
   rec.onerror = () => orb.classList.remove('listening');
   rec.onresult = e => ask(e.results[0][0].transcript, true);
-  speechSynthesis?.cancel(); unlockSpeech(); rec.start();
+  player.stop(); player.unlock(); rec.start();
 };
 
 // ---------------- Sources ----------------

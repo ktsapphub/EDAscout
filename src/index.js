@@ -80,6 +80,10 @@ async function route(req, env, ctx, url) {
     if (await limited(env, `ask:${ip(req)}`, 20, 3600)) return json({ answer: "You've asked a lot this hour. Try again in a bit.", sources: [] }, 429);
     return json(await ask(env, await req.json().catch(() => ({}))));
   }
+  if (p === '/api/tts' && m === 'POST') {
+    if (await limited(env, `tts:${ip(req)}`, 300, 3600)) return json({ error: 'Too many audio requests this hour.' }, 429);
+    return tts(env, await req.json().catch(() => ({})));
+  }
   if (p === '/api/hit' && m === 'POST') return json(await hit(req, env));
   if (p === '/api/stats' && m === 'GET') return json(await stats(env, url.searchParams.get('range')));
   if (p === '/api/run' && m === 'POST') {
@@ -404,6 +408,31 @@ async function stats(env, range = '7') {
     byArea, daily: [...dayMap.values()].sort((a, b) => a.day.localeCompare(b.day)),
     estimated: e.visitors || e.views ? { ...e, through: '2026-11-05' } : null,
   };
+}
+
+// ---------- Text to speech (real audio so it keeps playing when a phone locks) ----------
+const TTS_MODELS = [
+  ['@cf/deepgram/aura-1', t => ({ text: t, speaker: 'asteria' })],
+  ['@cf/myshell-ai/melotts', t => ({ prompt: t, lang: 'en' })],
+];
+async function tts(env, { text }) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
+  if (!t) return json({ error: 'No text' }, 400);
+  const key = `tts:${(await sha256(t)).slice(0, 40)}`;
+  const hit = await env.KV.get(key, 'arrayBuffer').catch(() => null);
+  const audio = r => new Response(r, { headers: { 'content-type': 'audio/mpeg', 'cache-control': 'public, max-age=604800' } });
+  if (hit) return audio(hit);
+  for (const [model, input] of TTS_MODELS) {
+    try {
+      const r = await env.AI.run(model, input(t));
+      let buf = null;
+      if (r instanceof ReadableStream) buf = await new Response(r).arrayBuffer();
+      else if (r instanceof ArrayBuffer) buf = r;
+      else if (r?.audio) { const bin = atob(r.audio); buf = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i); buf = buf.buffer; }
+      if (buf && buf.byteLength > 500) { await env.KV.put(key, buf, { expirationTtl: 7 * 86400 }).catch(() => {}); return audio(buf); }
+    } catch { /* next model */ }
+  }
+  return json({ error: 'Audio unavailable' }, 503);
 }
 
 // ---------- Ask ----------

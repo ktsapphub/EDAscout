@@ -37,5 +37,6 @@ jobs:
           done
           curl -s "https://edascout-staging.ktsapps.com/api/stats?range=30" | jq -c '{visitors, views}' | sed 's/^/usage (staging only): /'
           curl -s https://edascout-staging.ktsapps.com/ | grep -o 'app.js?v=[0-9]*' | head -1 | sed 's/^/front end: /'
+          curl -s -o /tmp/tts.mp3 -w 'tts: %{http_code} %{content_type} %{size_download} bytes %{time_total}s\n' -X POST -H 'content-type: application/json' -d '{"text":"Here is your Norfolk economic development brief."}' https://edascout-staging.ktsapps.com/api/tts
       - name: "Staging deployments"
         run: npx --yes wrangler@4 deployments list --env staging 2>&1 | tail -15 || true

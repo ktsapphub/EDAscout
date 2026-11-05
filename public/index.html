@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/app.css?v=21">
+  <link rel="stylesheet" href="/app.css?v=22">
 </head>
 <body>
   <header class="topbar">
@@ -60,6 +60,13 @@
   <div class="modal-back" id="modalBack" hidden></div>
   <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden></div>
 
+  <div class="player" id="player" role="region" aria-label="Audio player" hidden>
+    <span class="pl-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+    <span class="pl-label" id="plLabel">Listening</span>
+    <button class="pl-btn" id="plToggle" type="button" aria-pressed="false">❚❚ Pause</button>
+    <button class="pl-btn" id="plNext" type="button" aria-label="Skip to the next part">Skip ▸▸</button>
+    <button class="pl-btn stop" id="plStop" type="button">■ Stop</button>
+  </div>
   <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
   <footer class="foot">
@@ -80,6 +87,6 @@
     </section>
     <p>Independent project. Not affiliated with the City of Norfolk or the Norfolk Economic Development Authority. Summaries are machine-written from public sources; always check the linked original. Trend data: Federal Reserve Economic Data (FRED). Federal awards: USAspending.gov.</p>
   </footer>
-  <script src="/app.js?v=21" type="module"></script>
+  <script src="/app.js?v=22" type="module"></script>
 </body>
 </html>
